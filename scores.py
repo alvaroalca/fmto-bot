@@ -114,63 +114,69 @@ async def run():
             print("Logueando en Wirtex...")
             await page.goto(WIRTEX_URL, wait_until="networkidle")
 
-            # Debug: ver qué inputs hay
-            for inp in await page.query_selector_all("input"):
-                print(f"  [input] type={await inp.get_attribute('type')!r} "
-                      f"name={await inp.get_attribute('name')!r} "
-                      f"id={await inp.get_attribute('id')!r} "
-                      f"placeholder={await inp.get_attribute('placeholder')!r}")
+            # Campos confirmados por debug: name="UserName" y name="Password"
+            await page.fill('input[name="UserName"]', WIRTEX_USER)
+            await page.fill('input[name="Password"]', WIRTEX_PASS)
+            print("  Campos rellenados (UserName / Password)")
 
-            # Rellenar email
-            for sel in ['input[type="email"]', 'input[name*="mail"]', 'input[id*="mail"]',
-                        'input[placeholder*="mail"]', 'input[placeholder*="Mail"]',
-                        'input[placeholder*="usuario"]', 'input[placeholder*="Usuario"]']:
-                el = await page.query_selector(sel)
-                if el and await el.is_visible():
-                    await el.fill(WIRTEX_USER)
-                    print(f"  Email rellenado con: {sel}")
-                    break
+            # Buscar el botón de submit — loguear todos los botones visibles
+            buttons = await page.query_selector_all("button, input[type='submit']")
+            for btn in buttons:
+                txt  = ((await btn.inner_text()) or "").strip()
+                typ  = (await btn.get_attribute("type")) or ""
+                cls  = (await btn.get_attribute("class")) or ""
+                print(f"  [btn] type={typ!r} text={txt!r} class={cls[:60]!r}")
 
-            # Rellenar contraseña
-            for sel in ['input[type="password"]']:
-                el = await page.query_selector(sel)
-                if el and await el.is_visible():
-                    await el.fill(WIRTEX_PASS)
-                    print(f"  Password rellenado")
-                    break
-
-            # Submit
+            submitted = False
             for sel in ['button[type="submit"]', 'input[type="submit"]',
-                        'button:has-text("Entrar")', 'button:has-text("Login")',
-                        'button:has-text("Acceder")', 'button:has-text("Iniciar")']:
+                        'button:has-text("Start")', 'button:has-text("Login")',
+                        'button:has-text("Log in")', 'button:has-text("Sign in")',
+                        'button:has-text("Acceder")', 'button:has-text("Entrar")',
+                        'button:has-text("Iniciar sesión")']:
                 el = await page.query_selector(sel)
                 if el and await el.is_visible():
                     await el.click()
                     print(f"  Submit con: {sel}")
+                    submitted = True
                     break
-            else:
-                await page.keyboard.press("Enter")
-                print("  Submit vía Enter")
+            if not submitted:
+                await page.locator('input[name="Password"]').press("Enter")
+                print("  Submit vía Enter en campo password")
 
             await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(2000)
+
+            # Verificar login
+            body = await page.inner_text("body")
+            if "GUEST" in body.upper() or "INVITAD" in body.upper():
+                await page.screenshot(path="/tmp/wirtex_login_error.png")
+                raise Exception("Login fallido en Wirtex: sigue mostrando usuario invitado.")
             print(f"Sesión iniciada. URL: {page.url}")
 
             # 2. Ir a Competiciones → Mis competiciones
+            # La página puede estar en inglés (Competitions / My competitions)
+            # o en español (Competiciones / Mis competiciones)
             print("Navegando a Mis competiciones...")
 
-            # Clic en menú Competiciones
+            # Debug: ver todos los links del menú
+            for lnk in await page.query_selector_all("nav a, .nav a, .menu a, header a"):
+                print(f"  [nav] {((await lnk.inner_text()) or '').strip()!r} → {await lnk.get_attribute('href')!r}")
+
+            # Clic en menú Competiciones / Competitions
             for sel in ['a:has-text("Competiciones")', 'button:has-text("Competiciones")',
-                        'span:has-text("Competiciones")', 'li:has-text("Competiciones")']:
+                        'a:has-text("Competitions")', 'button:has-text("Competitions")',
+                        'span:has-text("Competiciones")', 'span:has-text("Competitions")']:
                 el = await page.query_selector(sel)
                 if el and await el.is_visible():
                     await el.click()
-                    print(f"  Menú Competiciones con: {sel}")
+                    print(f"  Menú principal con: {sel}")
                     await page.wait_for_timeout(1000)
                     break
 
-            # Clic en Mis competiciones
-            for sel in ['a:has-text("Mis competiciones")', 'button:has-text("Mis competiciones")',
-                        'span:has-text("Mis competiciones")']:
+            # Clic en Mis competiciones / My competitions
+            for sel in ['a:has-text("Mis competiciones")', 'a:has-text("My competitions")',
+                        'button:has-text("Mis competiciones")', 'button:has-text("My competitions")',
+                        'a:has-text("My Competitions")']:
                 el = await page.query_selector(sel)
                 if el and await el.is_visible():
                     await el.click()
@@ -183,7 +189,7 @@ async def run():
 
             # Debug: imprimir texto de la página para ver la tabla
             body_text = await page.inner_text("body")
-            print(f"[Debug] Primeros 1000 chars:\n{body_text[:1000]}")
+            print(f"[Debug] Primeros 1500 chars:\n{body_text[:1500]}")
 
             # 3. Buscar la competición PISTOLA AIRE 10M más reciente
             rows = await page.query_selector_all("tr, .competition-row, .list-item, li")
