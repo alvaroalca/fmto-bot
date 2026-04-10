@@ -120,7 +120,11 @@ async def run():
                 await spain.click()
                 print("  Seleccionado país: Spain")
                 await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(1500)
+                await page.wait_for_timeout(2000)
+
+            print(f"  URL tras Spain: {page.url}")
+            body_dbg = await page.inner_text("body")
+            print(f"  [Debug página tras Spain] Primeros 600 chars:\n{body_dbg[:600]}")
 
             # Abrir el dropdown de login (botón "Acceder" / "Access" arriba a la derecha)
             acceder = None
@@ -135,8 +139,11 @@ async def run():
                     break
                 acceder = None
             if not acceder:
-                body_dbg = await page.inner_text("body")
-                print(f"[Debug página] Primeros 800 chars:\n{body_dbg[:800]}")
+                print(f"  [Debug botones] Lista de todos los links/botones:")
+                for el in await page.query_selector_all("a, button"):
+                    txt = ((await el.inner_text()) or "").strip()
+                    if txt:
+                        print(f"    {txt[:80]!r}")
                 raise Exception("No se encontró el botón de login en la página.")
             await acceder.click()
             print("  Clic en 'Acceder'")
