@@ -97,78 +97,13 @@ async def run():
         page = await context.new_page()
 
         try:
-            # 1. Login
+            # 1. Login  (selectores confirmados en el código original)
             print("Logueando en FMTO...")
             await page.goto(f"{BASE_URL}/acceso-federados", wait_until="networkidle")
-
-            # Imprimir todos los inputs visibles para debug
-            inputs = await page.query_selector_all("input")
-            for inp in inputs:
-                name = await inp.get_attribute("name") or ""
-                id_  = await inp.get_attribute("id") or ""
-                typ  = await inp.get_attribute("type") or ""
-                print(f"  [input] type={typ!r} name={name!r} id={id_!r}")
-
-            # Rellenar usuario — Joomla suele usar name="username"
-            user_filled = False
-            for sel in ['input[name="username"]', 'input[id="username"]',
-                        'input[type="text"]', 'input[autocomplete="username"]']:
-                el = await page.query_selector(sel)
-                if el and await el.is_visible():
-                    await el.fill(FMTO_USER)
-                    print(f"  Usuario rellenado con selector: {sel}")
-                    user_filled = True
-                    break
-            if not user_filled:
-                raise Exception("No se encontró el campo de usuario en el formulario de login.")
-
-            # Rellenar contraseña
-            pass_filled = False
-            for sel in ['input[name="password"]', 'input[id="password"]',
-                        'input[type="password"]']:
-                el = await page.query_selector(sel)
-                if el and await el.is_visible():
-                    await el.fill(FMTO_PASS)
-                    print(f"  Contraseña rellenada con selector: {sel}")
-                    pass_filled = True
-                    break
-            if not pass_filled:
-                raise Exception("No se encontró el campo de contraseña en el formulario de login.")
-
-            # Enviar formulario — probar varios selectores de botón
-            submitted = False
-            for sel in [
-                'button[type="submit"]',
-                'input[type="submit"]',
-                'button:has-text("Identificarse")',
-                'button:has-text("Entrar")',
-                'button:has-text("Login")',
-                'input[value="Identificarse"]',
-            ]:
-                el = await page.query_selector(sel)
-                if el and await el.is_visible():
-                    print(f"  Submit con selector: {sel}")
-                    await el.click()
-                    submitted = True
-                    break
-            if not submitted:
-                # Último recurso: Enter en el campo de contraseña
-                print("  Submit vía tecla Enter")
-                await page.keyboard.press("Enter")
-
-            # Esperar a que la URL cambie (máx 10 s)
-            try:
-                await page.wait_for_url(
-                    lambda url: "acceso-federados" not in url,
-                    timeout=10000
-                )
-            except Exception:
-                # Capturar screenshot y HTML para debug
-                await page.screenshot(path="/tmp/login_error.png")
-                html_snippet = (await page.content())[:2000]
-                print(f"[DEBUG] HTML tras submit:\n{html_snippet}")
-                raise Exception("Login fallido: la página no redirigió tras el envío del formulario.")
-
+            await page.fill('input[name="username"]', FMTO_USER)
+            await page.fill('input[name="password"]', FMTO_PASS)
+            await page.click('button[type="submit"]')
+            await page.wait_for_load_state("networkidle")
             print(f"Sesión iniciada. URL actual: {page.url}")
 
             # 2. Ir a la lista de competiciones
