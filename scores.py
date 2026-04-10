@@ -123,58 +123,40 @@ async def run():
                 await page.wait_for_timeout(2000)
 
             print(f"  URL tras Spain: {page.url}")
-            body_dbg = await page.inner_text("body")
-            print(f"  [Debug página tras Spain] Primeros 600 chars:\n{body_dbg[:600]}")
 
-            # Abrir el dropdown de login (botón "Acceder" / "Access" arriba a la derecha)
-            acceder = None
-            for sel in ['a:has-text("Acceder")', 'button:has-text("Acceder")',
-                        'a:has-text("Access")', 'button:has-text("Access")',
-                        'a:has-text("Login")', 'button:has-text("Login")',
-                        'a:has-text("Log in")', 'button:has-text("Log in")',
-                        'a[href*="login"]', 'a[href*="acceso"]', 'a[href*="access"]']:
-                acceder = await page.query_selector(sel)
-                if acceder and await acceder.is_visible():
-                    print(f"  Botón login con: {sel}")
-                    break
-                acceder = None
-            if not acceder:
-                print(f"  [Debug botones] Lista de todos los links/botones:")
-                for el in await page.query_selector_all("a, button"):
-                    txt = ((await el.inner_text()) or "").strip()
-                    if txt:
-                        print(f"    {txt[:80]!r}")
-                raise Exception("No se encontró el botón de login en la página.")
-            await acceder.click()
-            print("  Clic en 'Acceder'")
-            await page.wait_for_timeout(1500)
+            # Rellenar y enviar el formulario de login via JavaScript
+            # (evita problemas de overlays que bloquean clicks)
+            await page.evaluate(
+                """([user, pwd]) => {
+                    const inputs = [...document.querySelectorAll('input:not([type="hidden"])')];
+                    const userInput = inputs.find(i =>
+                        i.type === 'email' ||
+                        (i.name || '').toLowerCase().includes('user') ||
+                        (i.name || '').toLowerCase().includes('mail') ||
+                        (i.name || '').toLowerCase().includes('login')
+                    ) || inputs[0];
+                    const passInput = inputs.find(i => i.type === 'password');
 
-            # Rellenar el formulario del dropdown (Correo electrónico / Contraseña)
-            await page.wait_for_selector('input[type="email"], input[placeholder*="Correo"], input[placeholder*="correo"], input[name*="mail"], input[name*="user" i]', state="visible", timeout=8000)
+                    function setVal(el, val) {
+                        const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                        nativeSet.call(el, val);
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                    }
+                    if (userInput) setVal(userInput, user);
+                    if (passInput) setVal(passInput, pwd);
+                }""",
+                [WIRTEX_USER, WIRTEX_PASS]
+            )
+            print("  Campos rellenados via JS")
 
-            # Email / usuario
-            for sel in ['input[type="email"]', 'input[placeholder*="Correo" i]',
-                        'input[name*="mail" i]', 'input[name*="user" i]']:
-                el = await page.query_selector(sel)
-                if el and await el.is_visible():
-                    await el.fill(WIRTEX_USER)
-                    print(f"  Email con: {sel}")
-                    break
-
-            # Contraseña
-            pw_el = await page.query_selector('input[type="password"]')
-            if pw_el:
-                await pw_el.fill(WIRTEX_PASS)
-                print("  Contraseña rellenada")
-
-            # Submit — botón "Iniciar sesión"
-            for sel in ['button:has-text("Iniciar sesión")', 'button:has-text("Iniciar")',
-                        'input[type="submit"]', 'button[type="submit"]']:
-                el = await page.query_selector(sel)
-                if el and await el.is_visible():
-                    await el.click()
-                    print(f"  Submit con: {sel}")
-                    break
+            # Enviar el formulario via JS (bypassa el overlay)
+            await page.evaluate("""
+                const btn = document.querySelector('button[type="submit"], input[type="submit"]');
+                if (btn) btn.click();
+                else { const f = document.querySelector('form'); if (f) f.submit(); }
+            """)
+            print("  Submit via JS")
 
             await page.wait_for_load_state("networkidle")
             await page.wait_for_timeout(2000)
