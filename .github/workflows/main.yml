@@ -1,7 +1,7 @@
 name: Ejecutar Bot FMTO
 on:
   schedule:
-    - cron: '0 9,15 * * *' # Se ejecuta a las 9:00 y a las 15:00 todos los días
+    - cron: '0 9,15 * * *' # 9:00 y 15:00 todos los días
   workflow_dispatch: # Permite ejecutarlo a mano para probar
 
 jobs:
@@ -9,11 +9,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Descargar código
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4 # Actualizado de v3 a v4
       - name: Configurar Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # Actualizado de v4 a v5
         with:
-          python-version: '3.9'
+          python-version: '3.11' # Versión de Python más moderna
       - name: Instalar dependencias
         run: |
           pip install playwright requests pypdf
