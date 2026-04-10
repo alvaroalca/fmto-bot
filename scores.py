@@ -114,7 +114,20 @@ async def run():
             print("Logueando en Wirtex...")
             await page.goto(WIRTEX_URL, wait_until="networkidle")
 
+            # El formulario de login está oculto; hay que abrir el modal/dropdown primero
+            for sel in ['a:has-text("Access club")', 'a:has-text("Acceso club")',
+                        'a:has-text("Acceso")', 'a:has-text("Login")',
+                        'button:has-text("Login")', 'a:has-text("Iniciar sesión")',
+                        'a[href*="login"]', 'a[href*="acceso"]']:
+                el = await page.query_selector(sel)
+                if el and await el.is_visible():
+                    await el.click()
+                    print(f"  Login trigger con: {sel}")
+                    await page.wait_for_timeout(1500)
+                    break
+
             # Campos confirmados por debug: name="UserName" y name="Password"
+            await page.wait_for_selector('input[name="UserName"]', state="visible", timeout=10000)
             await page.fill('input[name="UserName"]', WIRTEX_USER)
             await page.fill('input[name="Password"]', WIRTEX_PASS)
             print("  Campos rellenados (UserName / Password)")
