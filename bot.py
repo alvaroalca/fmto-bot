@@ -253,9 +253,8 @@ def _notify(result, competition_url):
         f"🎯 *Preparatoria Pistola Aire 10m*\n"
         f"📋 {comp_name}\n\n"
         f"N Fed: `{TARGET_NFED}`\n"
-        f"🏅 Puesto: *{puesto}*\n"
-        f"⏱ Tanda: *{tanda}*\n\n"
-        f"[Ver competición]({competition_url})"
+        f"📍 Puesto: *{puesto}*\n"
+        f"⏱ Tanda: *{tanda}*"
     )
     send_telegram(msg)
     print(f"Resultado enviado → Puesto: {puesto} | Tanda: {tanda}")
