@@ -16,7 +16,6 @@ async def run():
         context = await browser.new_context()
         page = await context.new_page()
 
-        # 1. Login
         print("Logueando en FMTO...")
         await page.goto("https://www.fmto.net/acceso-federados")
         await page.fill('input[name="username"]', os.getenv("FMTO_USER"))
@@ -24,52 +23,47 @@ async def run():
         await page.click('button[type="submit"]')
         await page.wait_for_timeout(3000)
 
-        # 2. Ir a la lista de puestos
         await page.goto("https://www.fmto.net/competiciones/provpues")
+        await page.wait_for_load_state("networkidle")
         
-        # 3. Buscar el enlace de la preparatoria más reciente
-        # Usamos una expresión regular para que encuentre el texto sin importar mayúsculas
-        link = page.get_by_role("link", name=re.compile(r"PREPARATORIA PISTOLA AIRE 10M", re.I)).first
+        # Buscamos el enlace
+        all_links = await page.query_selector_all("a")
+        pdf_url = None
+        for l in all_links:
+            t = await l.inner_text()
+            h = await l.get_attribute("href")
+            if h and "PISTOLA" in t.upper() and "AIRE" in t.upper():
+                pdf_url = h
+                print(f"Encontrado: {t}")
+                break
         
-        if await link.count() > 0:
-            pdf_url = await link.get_attribute("href")
-            if not pdf_url.startswith("http"):
-                pdf_url = "https://www.fmto.net" + pdf_url
-            
-            print(f"¡PDF encontrado!: {pdf_url}")
+        token = os.getenv("TELEGRAM_TOKEN")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
-            # 4. Descargar el PDF en memoria
-            response = requests.get(pdf_url)
-            pdf_file = io.BytesIO(response.content)
+        if pdf_url:
+            full_url = pdf_url if pdf_url.startswith("http") else f"https://www.fmto.net{pdf_url}"
+            print(f"Procesando PDF: {full_url}")
             
-            # 5. Leer el PDF buscando el N Fed 65226
-            reader = PdfReader(pdf_file)
-            found_text = ""
-            target_fed = "65226" # Tu número de federado
+            res = requests.get(full_url)
+            reader = PdfReader(io.BytesIO(res.content))
+            target = "65226"
+            found_line = None
             
-            for page_pdf in reader.pages:
-                text = page_pdf.extract_text()
-                if target_fed in text:
-                    # Buscamos la línea que contiene tu número
-                    lines = text.split('\n')
-                    for line in lines:
-                        if target_fed in line:
-                            found_text = line
-                            break
+            for p_pdf in reader.pages:
+                lines = p_pdf.extract_text().split('\n')
+                for line in lines:
+                    if target in line:
+                        found_line = line
+                        break
             
-            # 6. Enviar resultado a Telegram
-            token = os.getenv("TELEGRAM_TOKEN")
-            chat_id = os.getenv("TELEGRAM_CHAT_ID")
-            
-            if found_text:
-                msg = f"🎯 ¡Encontrado en el listado!\n\nLínea detectada:\n`{found_text}`\n\nPDF: {pdf_url}"
+            if found_line:
+                msg = f"🎯 *¡FICHA ENCONTRADA!*\n\n`{found_line}`\n\n[Ver PDF]({full_url})"
             else:
-                msg = f"✅ PDF revisado pero NO se encontró el N Fed {target_fed}.\nPDF: {pdf_url}"
-                
+                msg = f"✅ PDF de Pistola Aire detectado, pero no veo tu federado {target} dentro.\n[Abrir PDF para revisar]({full_url})"
+            
             requests.get(f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text={msg}&parse_mode=Markdown")
-            print("Mensaje enviado a Telegram.")
         else:
-            print("No se encontró ningún enlace de Pistola Aire 10m.")
+            print("No se encontró ningún link con 'PISTOLA' y 'AIRE'.")
 
         await browser.close()
 
