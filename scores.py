@@ -123,13 +123,36 @@ async def run():
                 if el and await el.is_visible():
                     await el.click()
                     print(f"  Login trigger con: {sel}")
-                    await page.wait_for_timeout(1500)
+                    await page.wait_for_load_state("networkidle")
+                    await page.wait_for_timeout(2000)
                     break
 
+            print(f"  URL tras trigger: {page.url}")
+
+            # Debug: ver si el input existe y su estado
+            un_el = await page.query_selector('input[name="UserName"]')
+            if un_el:
+                vis = await un_el.is_visible()
+                print(f"  input[name=UserName] existe, visible={vis}")
+                if not vis:
+                    # Intentar hacer visible via JS
+                    await page.evaluate("""
+                        const el = document.querySelector('input[name="UserName"]');
+                        if (el) {
+                            el.style.display = '';
+                            el.style.visibility = 'visible';
+                            el.style.opacity = '1';
+                            let p = el.parentElement;
+                            while (p) { p.style.display = ''; p = p.parentElement; }
+                        }
+                    """)
+                    await page.wait_for_timeout(500)
+            else:
+                print("  input[name=UserName] NO encontrado en DOM")
+
             # Campos confirmados por debug: name="UserName" y name="Password"
-            await page.wait_for_selector('input[name="UserName"]', state="visible", timeout=10000)
-            await page.fill('input[name="UserName"]', WIRTEX_USER)
-            await page.fill('input[name="Password"]', WIRTEX_PASS)
+            await page.fill('input[name="UserName"]', WIRTEX_USER, force=True)
+            await page.fill('input[name="Password"]', WIRTEX_PASS, force=True)
             print("  Campos rellenados (UserName / Password)")
 
             # Buscar el botón de submit — loguear todos los botones visibles
