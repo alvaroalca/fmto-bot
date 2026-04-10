@@ -1,23 +1,26 @@
 name: Ejecutar Bot FMTO
 on:
   schedule:
-    - cron: '0 9,15 * * *' # 9:00 y 15:00 todos los días
+    - cron: '0 7 * * 5'   # Viernes 09:00 CEST (UTC+2)
+    - cron: '0 10 * * 5'  # Viernes 12:00 CEST
+    - cron: '0 16 * * 5'  # Viernes 18:00 CEST
   workflow_dispatch: # Permite ejecutarlo a mano para probar
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Descargar código
-        uses: actions/checkout@v4 # Actualizado de v3 a v4
+        uses: actions/checkout@v4
       - name: Configurar Python
-        uses: actions/setup-python@v5 # Actualizado de v4 a v5
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11' # Versión de Python más moderna
+          python-version: '3.11'
       - name: Instalar dependencias
         run: |
           pip install playwright requests pypdf
-          playwright install chromium
+          playwright install chromium --with-deps
       - name: Ejecutar bot
         env:
           FMTO_USER: ${{ secrets.FMTO_USER }}
