@@ -2,6 +2,7 @@ import os
 import asyncio
 import re
 import requests
+from datetime import date, datetime
 from playwright.async_api import async_playwright
 
 WIRTEX_USER      = os.getenv("WIRTEX_USER")
@@ -205,23 +206,33 @@ async def run():
             body_text = await page.inner_text("body")
             print(f"[Debug] Primeros 1500 chars:\n{body_text[:1500]}")
 
-            # 3. Buscar la competición PISTOLA AIRE 10M más reciente
+            # 3. Buscar la competición PISTOLA AIRE 10M más reciente YA PASADA
             rows = await page.query_selector_all("tr, .competition-row, .list-item, li")
             target_row = None
             comp_date  = None
+            today = date.today()
 
             for row in rows:
                 text = (await row.inner_text()).upper()
-                if COMP_KEYWORD in text and "PREPARATORIA" in text:
-                    target_row = row
-                    date_m = re.search(r'\d{2}/\d{2}/\d{4}', await row.inner_text())
-                    if date_m:
-                        comp_date = date_m.group(0)
-                    print(f"  Competición encontrada: {(await row.inner_text())[:150]!r}")
-                    break
+                if COMP_KEYWORD not in text or "PREPARATORIA" not in text:
+                    continue
+                date_m = re.search(r'(\d{2})/(\d{2})/(\d{4})', await row.inner_text())
+                if not date_m:
+                    continue
+                try:
+                    row_date = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
+                except ValueError:
+                    continue
+                if row_date > today:
+                    print(f"  Saltando competición futura: {date_m.group(0)}")
+                    continue
+                target_row = row
+                comp_date  = date_m.group(0)
+                print(f"  Competición encontrada: {(await row.inner_text())[:150]!r}")
+                break  # la lista está ordenada desc, la primera pasada es la más reciente
 
             if not target_row:
-                print("No se encontró la competición. ¿Aún no publicada?")
+                print("No se encontró ninguna competición pasada. ¿Aún no publicada?")
                 return
 
             # 4. Comprobar si ya fue notificada
