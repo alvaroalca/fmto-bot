@@ -20,13 +20,20 @@ TARGET_NFED = "65226"
 # ---------------------------------------------------------------------------
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    requests.post(url, json={
+    r = requests.post(url, json={
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
         "parse_mode": "Markdown",
         "disable_web_page_preview": False,
     })
-    print("[Telegram] Mensaje enviado.")
+    print(f"[Telegram] status={r.status_code} respuesta={r.text[:300]}")
+
+
+def send_telegram_photo(path, caption=""):
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+    with open(path, "rb") as f:
+        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption}, files={"photo": f})
+    print(f"[Telegram foto] status={r.status_code} respuesta={r.text[:200]}")
 
 
 # ---------------------------------------------------------------------------
@@ -102,8 +109,29 @@ async def run():
             await page.goto(f"{BASE_URL}/acceso-federados", wait_until="networkidle")
             await page.fill('input[name="username"]', FMTO_USER)
             await page.fill('input[name="password"]', FMTO_PASS)
-            await page.click('button[type="submit"]')
-            await page.wait_for_load_state("networkidle")
+
+            # Intentar submit: primero click en botón, luego Enter como fallback
+            btn = await page.query_selector('button[type="submit"]')
+            if btn:
+                await btn.click()
+                print("  Submit vía button[type=submit]")
+            else:
+                await page.keyboard.press("Enter")
+                print("  Submit vía Enter (botón no encontrado)")
+
+            await page.wait_for_timeout(5000)
+
+            # Si seguimos en login, tomar screenshot y abortar con info útil
+            if "acceso-federados" in page.url:
+                await page.screenshot(path="/tmp/login_debug.png")
+                try:
+                    send_telegram_photo("/tmp/login_debug.png", "🔍 Debug: pantalla tras intento de login")
+                except Exception:
+                    pass
+                raise Exception(
+                    f"Login fallido: URL={page.url} — revisa FMTO_USER y FMTO_PASS en los secrets de GitHub."
+                )
+
             print(f"Sesión iniciada. URL actual: {page.url}")
 
             # 2. Ir a la lista de competiciones
