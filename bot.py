@@ -138,13 +138,21 @@ async def run():
             # 4. Entrar a la página de la competición
             await page.goto(competition_url, wait_until="networkidle")
 
-            # Log de todos los links para debug
-            all_links = await page.query_selector_all("a")
-            for lnk in all_links:
-                h = (await lnk.get_attribute("href")) or ""
-                t = ((await lnk.inner_text()) or "").strip()
-                if h:
-                    print(f"  [link] {t!r} → {h}")
+            # Screenshot de la página de la competición → Telegram para debug visual
+            await page.screenshot(path="/tmp/comp_page.png", full_page=True)
+            try:
+                send_telegram_photo("/tmp/comp_page.png", "📄 Página de la competición")
+            except Exception:
+                pass
+
+            # Log de todos los inputs y botones
+            for el in await page.query_selector_all("input, button, a[href='#']"):
+                tag  = await el.evaluate("e => e.tagName.toLowerCase()")
+                name = (await el.get_attribute("name")) or ""
+                typ  = (await el.get_attribute("type")) or ""
+                txt  = ((await el.inner_text()) or "").strip()
+                href = (await el.get_attribute("href")) or ""
+                print(f"  [{tag}] type={typ!r} name={name!r} text={txt!r} href={href!r}")
 
             # 5. Descargar el PDF interceptando la descarga del navegador
             # Solo se consideran links del propio dominio fmto.net (no externos como phoca.cz)
