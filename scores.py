@@ -230,9 +230,18 @@ async def run():
                 return
 
             # 5. Buscar el botón/enlace de resultados en la fila
+            # Debug: listar todos los links de la fila
+            row_links = await target_row.query_selector_all("a, button")
+            for lnk in row_links:
+                txt  = ((await lnk.inner_text()) or "").strip()
+                href = (await lnk.get_attribute("href")) or ""
+                print(f"  [fila link] text={txt!r} href={href!r}")
+
             results_el = None
             for sel in ['a:has-text("Resultados")', 'button:has-text("Resultados")',
-                        'a:has-text("Ver resultados")', 'a[href*="result"]']:
+                        'a:has-text("Ver resultados")', 'a[href*="result" i]',
+                        'a[href*="Resultado" i]', 'a[href*="Puntuacion" i]',
+                        'a[href*="Score" i]']:
                 results_el = await target_row.query_selector(sel)
                 if results_el:
                     print(f"  Enlace resultados con: {sel}")
