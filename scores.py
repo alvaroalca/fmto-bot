@@ -12,7 +12,7 @@ LAST_SCORES      = os.getenv("LAST_SCORES", "")
 GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")
 
-WIRTEX_URL    = "https://www.wirtexsports.com/Publica/GLB/HomePub?MOBILE=NO"
+WIRTEX_URL    = "https://www.wirtexsports.com"
 COMP_KEYWORD  = "PISTOLA AIRE 10 METROS"
 TARGET_NAME   = "ALCARAZ"
 
@@ -114,78 +114,47 @@ async def run():
             print("Logueando en Wirtex...")
             await page.goto(WIRTEX_URL, wait_until="networkidle")
 
-            # El formulario de login está oculto; hay que abrir el modal/dropdown primero
-            for sel in ['a:has-text("Access club")', 'a:has-text("Acceso club")',
-                        'a:has-text("Acceso")', 'a:has-text("Login")',
-                        'button:has-text("Login")', 'a:has-text("Iniciar sesión")',
-                        'a[href*="login"]', 'a[href*="acceso"]']:
+            # Abrir el dropdown de login (botón "Acceder" arriba a la derecha)
+            acceder = await page.query_selector('a:has-text("Acceder"), button:has-text("Acceder")')
+            if not acceder:
+                raise Exception("No se encontró el botón 'Acceder' en la página.")
+            await acceder.click()
+            print("  Clic en 'Acceder'")
+            await page.wait_for_timeout(1500)
+
+            # Rellenar el formulario del dropdown (Correo electrónico / Contraseña)
+            await page.wait_for_selector('input[type="email"], input[placeholder*="Correo"], input[placeholder*="correo"], input[name*="mail"], input[name*="user" i]', state="visible", timeout=8000)
+
+            # Email / usuario
+            for sel in ['input[type="email"]', 'input[placeholder*="Correo" i]',
+                        'input[name*="mail" i]', 'input[name*="user" i]']:
                 el = await page.query_selector(sel)
                 if el and await el.is_visible():
-                    await el.click()
-                    print(f"  Login trigger con: {sel}")
-                    await page.wait_for_load_state("networkidle")
-                    await page.wait_for_timeout(2000)
+                    await el.fill(WIRTEX_USER)
+                    print(f"  Email con: {sel}")
                     break
 
-            print(f"  URL tras trigger: {page.url}")
+            # Contraseña
+            pw_el = await page.query_selector('input[type="password"]')
+            if pw_el:
+                await pw_el.fill(WIRTEX_PASS)
+                print("  Contraseña rellenada")
 
-            # Debug: ver si el input existe y su estado
-            un_el = await page.query_selector('input[name="UserName"]')
-            if un_el:
-                vis = await un_el.is_visible()
-                print(f"  input[name=UserName] existe, visible={vis}")
-                if not vis:
-                    # Intentar hacer visible via JS
-                    await page.evaluate("""
-                        const el = document.querySelector('input[name="UserName"]');
-                        if (el) {
-                            el.style.display = '';
-                            el.style.visibility = 'visible';
-                            el.style.opacity = '1';
-                            let p = el.parentElement;
-                            while (p) { p.style.display = ''; p = p.parentElement; }
-                        }
-                    """)
-                    await page.wait_for_timeout(500)
-            else:
-                print("  input[name=UserName] NO encontrado en DOM")
-
-            # Campos confirmados por debug: name="UserName" y name="Password"
-            await page.fill('input[name="UserName"]', WIRTEX_USER, force=True)
-            await page.fill('input[name="Password"]', WIRTEX_PASS, force=True)
-            print("  Campos rellenados (UserName / Password)")
-
-            # Buscar el botón de submit — loguear todos los botones visibles
-            buttons = await page.query_selector_all("button, input[type='submit']")
-            for btn in buttons:
-                txt  = ((await btn.inner_text()) or "").strip()
-                typ  = (await btn.get_attribute("type")) or ""
-                cls  = (await btn.get_attribute("class")) or ""
-                print(f"  [btn] type={typ!r} text={txt!r} class={cls[:60]!r}")
-
-            submitted = False
-            for sel in ['button[type="submit"]', 'input[type="submit"]',
-                        'button:has-text("Start")', 'button:has-text("Login")',
-                        'button:has-text("Log in")', 'button:has-text("Sign in")',
-                        'button:has-text("Acceder")', 'button:has-text("Entrar")',
-                        'button:has-text("Iniciar sesión")']:
+            # Submit — botón "Iniciar sesión"
+            for sel in ['button:has-text("Iniciar sesión")', 'button:has-text("Iniciar")',
+                        'input[type="submit"]', 'button[type="submit"]']:
                 el = await page.query_selector(sel)
                 if el and await el.is_visible():
                     await el.click()
                     print(f"  Submit con: {sel}")
-                    submitted = True
                     break
-            if not submitted:
-                await page.locator('input[name="Password"]').press("Enter")
-                print("  Submit vía Enter en campo password")
 
             await page.wait_for_load_state("networkidle")
             await page.wait_for_timeout(2000)
 
             # Verificar login
             body = await page.inner_text("body")
-            if "GUEST" in body.upper() or "INVITAD" in body.upper():
-                await page.screenshot(path="/tmp/wirtex_login_error.png")
+            if "INVITADO" in body.upper() or "GUEST" in body.upper():
                 raise Exception("Login fallido en Wirtex: sigue mostrando usuario invitado.")
             print(f"Sesión iniciada. URL: {page.url}")
 
