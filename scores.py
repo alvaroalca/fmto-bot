@@ -14,7 +14,7 @@ GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")
 
 WIRTEX_URL    = "https://www.wirtexsports.com"
 COMP_KEYWORD  = "PISTOLA AIRE 10 METROS"
-TARGET_NAME   = "ALCARAZ"
+TARGET_NAME   = "ALCARAZ"   # busca "ALVARO ALCARAZ" en resultados
 
 
 # ---------------------------------------------------------------------------
@@ -114,12 +114,13 @@ async def run():
             print("Logueando en Wirtex...")
             await page.goto(WIRTEX_URL, wait_until="networkidle")
 
-            # Debug: listar todos los links/botones visibles
-            for el in await page.query_selector_all("a, button"):
-                txt = ((await el.inner_text()) or "").strip()
-                if txt:
-                    tag = await el.evaluate("e => e.tagName")
-                    print(f"  [elem] tag={tag!r} text={txt[:60]!r}")
+            # Si aparece selector de país, elegir España
+            spain = await page.query_selector('a:has-text("Spain")')
+            if spain and await spain.is_visible():
+                await spain.click()
+                print("  Seleccionado país: Spain")
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(1500)
 
             # Abrir el dropdown de login (botón "Acceder" / "Access" arriba a la derecha)
             acceder = None
