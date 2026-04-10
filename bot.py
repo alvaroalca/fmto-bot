@@ -181,17 +181,13 @@ async def run():
                     print(f"[PDF] Descargado: {len(pdf_bytes)} bytes")
                     break
 
-            # Método B: formulario Phoca Download (checkbox + submit)
+            # Método B: formulario Phoca Download — id="pdlicensesubmit", name="submit"
             if not pdf_bytes:
-                submit_btn = await page.query_selector('input[name="pdlicensesubmit"]')
+                submit_btn = await page.query_selector('input[id="pdlicensesubmit"]')
                 if submit_btn:
-                    print("[PDF] Método B: formulario pdlicensesubmit")
-                    checkbox = await page.query_selector('input[type="checkbox"]')
-                    if checkbox and not await checkbox.is_checked():
-                        await checkbox.check()
-                        await page.wait_for_timeout(500)
+                    print("[PDF] Método B: formulario Phoca Download (id=pdlicensesubmit)")
                     async with page.expect_download(timeout=20000) as dl_info:
-                        await submit_btn.click(force=True)
+                        await submit_btn.click()
                     download = await dl_info.value
                     tmp = "/tmp/fmto_result.pdf"
                     await download.save_as(tmp)
