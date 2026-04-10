@@ -118,7 +118,8 @@ async def run():
             for el in await page.query_selector_all("a, button"):
                 txt = ((await el.inner_text()) or "").strip()
                 if txt:
-                    print(f"  [elem] {el.element_handle} tag={(await el.evaluate('e => e.tagName'))!r} text={txt[:60]!r}")
+                    tag = await el.evaluate("e => e.tagName")
+                    print(f"  [elem] tag={tag!r} text={txt[:60]!r}")
 
             # Abrir el dropdown de login (botón "Acceder" / "Access" arriba a la derecha)
             acceder = None
