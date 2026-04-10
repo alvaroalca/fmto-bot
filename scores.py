@@ -114,10 +114,28 @@ async def run():
             print("Logueando en Wirtex...")
             await page.goto(WIRTEX_URL, wait_until="networkidle")
 
-            # Abrir el dropdown de login (botón "Acceder" arriba a la derecha)
-            acceder = await page.query_selector('a:has-text("Acceder"), button:has-text("Acceder")')
+            # Debug: listar todos los links/botones visibles
+            for el in await page.query_selector_all("a, button"):
+                txt = ((await el.inner_text()) or "").strip()
+                if txt:
+                    print(f"  [elem] {el.element_handle} tag={(await el.evaluate('e => e.tagName'))!r} text={txt[:60]!r}")
+
+            # Abrir el dropdown de login (botón "Acceder" / "Access" arriba a la derecha)
+            acceder = None
+            for sel in ['a:has-text("Acceder")', 'button:has-text("Acceder")',
+                        'a:has-text("Access")', 'button:has-text("Access")',
+                        'a:has-text("Login")', 'button:has-text("Login")',
+                        'a:has-text("Log in")', 'button:has-text("Log in")',
+                        'a[href*="login"]', 'a[href*="acceso"]', 'a[href*="access"]']:
+                acceder = await page.query_selector(sel)
+                if acceder and await acceder.is_visible():
+                    print(f"  Botón login con: {sel}")
+                    break
+                acceder = None
             if not acceder:
-                raise Exception("No se encontró el botón 'Acceder' en la página.")
+                body_dbg = await page.inner_text("body")
+                print(f"[Debug página] Primeros 800 chars:\n{body_dbg[:800]}")
+                raise Exception("No se encontró el botón de login en la página.")
             await acceder.click()
             print("  Clic en 'Acceder'")
             await page.wait_for_timeout(1500)
