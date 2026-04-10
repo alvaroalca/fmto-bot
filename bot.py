@@ -40,7 +40,12 @@ def send_telegram_photo(path, caption=""):
 # PDF parsing
 # ---------------------------------------------------------------------------
 def parse_pdf(pdf_bytes):
-    """Devuelve (puesto, tanda, linea_raw) para el tirador con TARGET_NFED."""
+    """Devuelve (puesto, tanda, linea_raw) para el tirador con TARGET_NFED.
+
+    Formato del PDF (columnas de derecha a izquierda en el texto extraído):
+      MODALIDAD  NFed  Nivel  Categoría  Puesto  Tanda
+    Los dos últimos números de la línea son siempre Puesto y Tanda.
+    """
     reader = PdfReader(io.BytesIO(pdf_bytes))
 
     for page in reader.pages:
@@ -49,60 +54,18 @@ def parse_pdf(pdf_bytes):
             continue
 
         lines = [l.strip() for l in text.split("\n") if l.strip()]
-        print(f"[PDF] {len(lines)} líneas en esta página, buscando N Fed {TARGET_NFED}...")
+        print(f"[PDF] Página con {TARGET_NFED} encontrada ({len(lines)} líneas)")
 
-        # Imprimir todas las líneas para debug
-        for i, l in enumerate(lines):
-            print(f"  [{i:02d}] {l}")
-
-        # --- Estrategia A: "TANDA X" como cabecera de sección ---
-        current_tanda = None
-        for line in lines:
-            m = re.match(r"TANDA\s+(\d+)", line, re.IGNORECASE)
-            if m:
-                current_tanda = m.group(1)
-                continue
-            if TARGET_NFED in line:
-                nums = re.findall(r"\d+", line)
-                nfed_idx = next((i for i, n in enumerate(nums) if n == TARGET_NFED), -1)
-                puesto = nums[nfed_idx - 1] if nfed_idx > 0 else None
-                if puesto and current_tanda:
-                    print(f"[PDF] Estrategia A → Puesto: {puesto}, Tanda: {current_tanda}")
-                    return puesto, current_tanda, line
-
-        # --- Estrategia B: tabla plana, tanda como columna ---
-        # Busca el número más pequeño (≤ 20) distinto del puesto al final de la línea
         for line in lines:
             if TARGET_NFED not in line:
                 continue
             nums = re.findall(r"\d+", line)
-            nfed_idx = next((i for i, n in enumerate(nums) if n == TARGET_NFED), -1)
-            if nfed_idx < 0:
+            if len(nums) < 2:
                 continue
-            # Puesto: número justo antes del N Fed, o primero de la línea
-            puesto = nums[nfed_idx - 1] if nfed_idx > 0 else None
-            # Tanda: último número ≤ 20 que no sea el puesto
-            tanda = next(
-                (n for n in reversed(nums)
-                 if int(n) <= 20 and n != puesto),
-                None
-            )
-            if puesto and tanda:
-                print(f"[PDF] Estrategia B → Puesto: {puesto}, Tanda: {tanda}")
-                return puesto, tanda, line
-
-        # --- Estrategia C: buscar en ventana de ±2 líneas ---
-        for i, line in enumerate(lines):
-            if TARGET_NFED not in line:
-                continue
-            window = lines[max(0, i-2):i+3]
-            combined = " ".join(window)
-            print(f"[PDF] Estrategia C, ventana: {combined!r}")
-            nums = re.findall(r"\d+", combined)
-            nfed_idx = next((j for j, n in enumerate(nums) if n == TARGET_NFED), -1)
-            puesto = nums[nfed_idx - 1] if nfed_idx > 0 else None
-            tanda  = next((n for n in reversed(nums) if int(n) <= 20 and n != puesto), None)
-            print(f"[PDF] Estrategia C → Puesto: {puesto}, Tanda: {tanda}")
+            tanda  = nums[-1]
+            puesto = nums[-2]
+            print(f"[PDF] Línea: {line!r}")
+            print(f"[PDF] Números: {nums} → Puesto={puesto}, Tanda={tanda}")
             return puesto, tanda, line
 
     return None
