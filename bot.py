@@ -4,37 +4,49 @@ from playwright.async_api import async_playwright
 import requests
 import io
 import re
-try:
-    from pypdf import PdfReader
-except ImportError:
-    os.system('pip install pypdf')
-    from pypdf import PdfReader
 
 async def run():
     async with async_playwright() as p:
+        # Abrimos el navegador
         browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
+        context = await browser.new_context(viewport={'width': 1280, 'height': 720})
         page = await context.new_page()
 
+        # 1. Login
         print("Logueando en FMTO...")
-        await page.goto("https://www.fmto.net/acceso-federados")
+        await page.goto("https://www.fmto.net/acceso-federados", wait_until="networkidle")
         await page.fill('input[name="username"]', os.getenv("FMTO_USER"))
         await page.fill('input[name="password"]', os.getenv("FMTO_PASS"))
         await page.click('button[type="submit"]')
-        await page.wait_for_timeout(3000)
-
-        await page.goto("https://www.fmto.net/competiciones/provpues")
-        await page.wait_for_load_state("networkidle")
         
-        # Buscamos el enlace
+        # Esperamos a que el login procese
+        await page.wait_for_timeout(5000)
+
+        # 2. Ir a la lista de puestos
+        print("Navegando a Puestos...")
+        await page.goto("https://www.fmto.net/competiciones/provpues", wait_until="networkidle")
+        
+        # ESPERA CRÍTICA: Esperamos a que aparezca al menos un enlace en la tabla
+        try:
+            await page.wait_for_selector("a", timeout=10000)
+        except:
+            print("La página tardó demasiado en cargar los enlaces.")
+
+        # 3. Buscador ultra-flexible
         all_links = await page.query_selector_all("a")
         pdf_url = None
-        for l in all_links:
-            t = await l.inner_text()
-            h = await l.get_attribute("href")
-            if h and "PISTOLA" in t.upper() and "AIRE" in t.upper():
-                pdf_url = h
-                print(f"Encontrado: {t}")
+        target_fed = "65226"
+        
+        print(f"He encontrado {len(all_links)} enlaces en total. Buscando el correcto...")
+
+        for link in all_links:
+            text = (await link.inner_text()).upper()
+            href = await link.get_attribute("href")
+            
+            # Buscamos combinaciones de palabras clave
+            if href and ("PISTOLA" in text and "AIRE" in text):
+                pdf_url = href
+                print(f"¡Cazado!: {text}")
                 break
         
         token = os.getenv("TELEGRAM_TOKEN")
@@ -42,28 +54,32 @@ async def run():
 
         if pdf_url:
             full_url = pdf_url if pdf_url.startswith("http") else f"https://www.fmto.net{pdf_url}"
-            print(f"Procesando PDF: {full_url}")
+            print(f"Analizando PDF: {full_url}")
             
-            res = requests.get(full_url)
-            reader = PdfReader(io.BytesIO(res.content))
-            target = "65226"
-            found_line = None
-            
-            for p_pdf in reader.pages:
-                lines = p_pdf.extract_text().split('\n')
-                for line in lines:
-                    if target in line:
-                        found_line = line
-                        break
-            
-            if found_line:
-                msg = f"🎯 *¡FICHA ENCONTRADA!*\n\n`{found_line}`\n\n[Ver PDF]({full_url})"
-            else:
-                msg = f"✅ PDF de Pistola Aire detectado, pero no veo tu federado {target} dentro.\n[Abrir PDF para revisar]({full_url})"
+            # Intentamos leer el PDF
+            try:
+                from pypdf import PdfReader
+                res = requests.get(full_url)
+                reader = PdfReader(io.BytesIO(res.content))
+                found_line = None
+                
+                for p_pdf in reader.pages:
+                    lines = p_pdf.extract_text().split('\n')
+                    for line in lines:
+                        if target_fed in line:
+                            found_line = line
+                            break
+                
+                if found_line:
+                    msg = f"🎯 *¡FICHA ENCONTRADA!*\n\n`{found_line}`\n\n[Ver PDF]({full_url})"
+                else:
+                    msg = f"✅ PDF detectado, pero no veo el federado {target_fed}.\n[Abrir PDF]({full_url})"
+            except Exception as e:
+                msg = f"⚠️ He encontrado el enlace pero no he podido leer el PDF. Revísalo aquí: {full_url}"
             
             requests.get(f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text={msg}&parse_mode=Markdown")
         else:
-            print("No se encontró ningún link con 'PISTOLA' y 'AIRE'.")
+            print("Seguimos sin ver el link. Probablemente la web usa una estructura de carga lenta (iframe o JS).")
 
         await browser.close()
 
