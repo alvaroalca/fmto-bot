@@ -138,37 +138,46 @@ async def run():
             # 4. Entrar a la página de la competición
             await page.goto(competition_url, wait_until="networkidle")
 
-            # 5. Localizar el PDF (varios métodos)
-            pdf_url = None
+            # Log de todos los links para debug
+            all_links = await page.query_selector_all("a")
+            for lnk in all_links:
+                h = (await lnk.get_attribute("href")) or ""
+                t = ((await lnk.inner_text()) or "").strip()
+                if h:
+                    print(f"  [link] {t!r} → {h}")
 
-            # Método A: enlace directo con extensión .pdf
-            el = await page.query_selector("a[href$='.pdf'], a[href*='.pdf?']")
-            if el:
-                href = await el.get_attribute("href")
-                pdf_url = href if href.startswith("http") else f"{BASE_URL}{href}"
-                print(f"[PDF] Método A (enlace directo): {pdf_url}")
+            # 5. Descargar el PDF interceptando la descarga del navegador
+            # Solo se consideran links del propio dominio fmto.net (no externos como phoca.cz)
+            pdf_bytes = None
 
-            # Método B: Phoca Download u otro enlace de descarga genérico
-            if not pdf_url:
-                for sel in [
-                    "a[href*='phocadownload']",
-                    "a[href*='download']",
-                    "a:has-text('Descargar')",
-                    "a:has-text('PDF')",
-                    "a:has-text('Resultados')",
-                ]:
-                    el = await page.query_selector(sel)
-                    if el:
-                        href = (await el.get_attribute("href")) or ""
-                        if href:
-                            pdf_url = href if href.startswith("http") else f"{BASE_URL}{href}"
-                            print(f"[PDF] Método B ({sel}): {pdf_url}")
-                            break
+            def is_fmto_href(href):
+                if not href:
+                    return False
+                if href.startswith("http"):
+                    return "fmto.net" in href
+                return True  # relativo → es del mismo dominio
 
-            # Método C: formulario Phoca Download (checkbox + submit) → interceptar descarga
-            if not pdf_url:
+            # Método A: enlace directo .pdf en fmto.net
+            for lnk in await page.query_selector_all("a[href$='.pdf'], a[href*='.pdf?']"):
+                href = (await lnk.get_attribute("href")) or ""
+                if is_fmto_href(href):
+                    full = href if href.startswith("http") else f"{BASE_URL}{href}"
+                    print(f"[PDF] Método A: {full}")
+                    cookies = await context.cookies()
+                    s = requests.Session()
+                    for c in cookies:
+                        s.cookies.set(c["name"], c["value"], domain=c.get("domain", ""))
+                    r = s.get(full, timeout=30)
+                    r.raise_for_status()
+                    pdf_bytes = r.content
+                    print(f"[PDF] Descargado: {len(pdf_bytes)} bytes")
+                    break
+
+            # Método B: formulario Phoca Download (checkbox + submit)
+            if not pdf_bytes:
                 submit_btn = await page.query_selector('input[name="pdlicensesubmit"]')
                 if submit_btn:
+                    print("[PDF] Método B: formulario pdlicensesubmit")
                     checkbox = await page.query_selector('input[type="checkbox"]')
                     if checkbox and not await checkbox.is_checked():
                         await checkbox.check()
@@ -179,27 +188,37 @@ async def run():
                     tmp = "/tmp/fmto_result.pdf"
                     await download.save_as(tmp)
                     pdf_bytes = open(tmp, "rb").read()
-                    print(f"[PDF] Método C (formulario): {len(pdf_bytes)} bytes")
-                    result = parse_pdf(pdf_bytes)
-                    _notify(result, competition_url)
-                    return
+                    print(f"[PDF] Descargado: {len(pdf_bytes)} bytes")
 
-            if not pdf_url:
+            # Método C: cualquier link de descarga en fmto.net → interceptar como descarga
+            if not pdf_bytes:
+                for lnk in await page.query_selector_all("a"):
+                    href = (await lnk.get_attribute("href")) or ""
+                    text = ((await lnk.inner_text()) or "").strip().lower()
+                    if not is_fmto_href(href):
+                        continue
+                    if any(x in href for x in ["com_phocadownload", "download", "descargar"]) or \
+                       any(x in text for x in ["descargar", "pdf", "resultado"]):
+                        print(f"[PDF] Método C: {href!r} (texto: {text!r})")
+                        try:
+                            async with page.expect_download(timeout=15000) as dl_info:
+                                await lnk.click()
+                            download = await dl_info.value
+                            tmp = "/tmp/fmto_result.pdf"
+                            await download.save_as(tmp)
+                            pdf_bytes = open(tmp, "rb").read()
+                            print(f"[PDF] Descargado: {len(pdf_bytes)} bytes")
+                        except Exception as e:
+                            print(f"[PDF] Método C falló ({e}), probando siguiente...")
+                            await page.goto(competition_url, wait_until="networkidle")
+                            continue
+                        break
+
+            if not pdf_bytes:
                 raise Exception("No se encontró ningún enlace de descarga de PDF en la página de la competición.")
 
-            # 6. Descargar PDF reutilizando las cookies de sesión de Playwright
-            cookies = await context.cookies()
-            session = requests.Session()
-            for c in cookies:
-                session.cookies.set(c["name"], c["value"], domain=c.get("domain", ""))
-
-            print(f"[PDF] Descargando con sesión autenticada: {pdf_url}")
-            res = session.get(pdf_url, timeout=30)
-            res.raise_for_status()
-            print(f"[PDF] Descargado: {len(res.content)} bytes")
-
-            # 7. Parsear y notificar
-            result = parse_pdf(res.content)
+            # 6. Parsear y notificar
+            result = parse_pdf(pdf_bytes)
             _notify(result, competition_url)
 
         except Exception as e:
