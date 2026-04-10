@@ -51,6 +51,10 @@ def parse_pdf(pdf_bytes):
         lines = [l.strip() for l in text.split("\n") if l.strip()]
         print(f"[PDF] {len(lines)} líneas en esta página, buscando N Fed {TARGET_NFED}...")
 
+        # Imprimir todas las líneas para debug
+        for i, l in enumerate(lines):
+            print(f"  [{i:02d}] {l}")
+
         # --- Estrategia A: "TANDA X" como cabecera de sección ---
         current_tanda = None
         for line in lines:
@@ -67,6 +71,7 @@ def parse_pdf(pdf_bytes):
                     return puesto, current_tanda, line
 
         # --- Estrategia B: tabla plana, tanda como columna ---
+        # Busca el número más pequeño (≤ 20) distinto del puesto al final de la línea
         for line in lines:
             if TARGET_NFED not in line:
                 continue
@@ -74,22 +79,31 @@ def parse_pdf(pdf_bytes):
             nfed_idx = next((i for i, n in enumerate(nums) if n == TARGET_NFED), -1)
             if nfed_idx < 0:
                 continue
-            puesto = nums[nfed_idx - 1] if nfed_idx > 0 else (nums[0] if nums else None)
-            # La tanda suele ser el último número pequeño (≤ 20)
-            tanda = next((n for n in reversed(nums) if int(n) <= 20), None)
+            # Puesto: número justo antes del N Fed, o primero de la línea
+            puesto = nums[nfed_idx - 1] if nfed_idx > 0 else None
+            # Tanda: último número ≤ 20 que no sea el puesto
+            tanda = next(
+                (n for n in reversed(nums)
+                 if int(n) <= 20 and n != puesto),
+                None
+            )
             if puesto and tanda:
                 print(f"[PDF] Estrategia B → Puesto: {puesto}, Tanda: {tanda}")
                 return puesto, tanda, line
 
-        # --- Fallback: devolver lo que haya ---
-        for line in lines:
-            if TARGET_NFED in line:
-                nums = re.findall(r"\d+", line)
-                nfed_idx = next((i for i, n in enumerate(nums) if n == TARGET_NFED), -1)
-                puesto = nums[nfed_idx - 1] if nfed_idx > 0 else "?"
-                tanda  = nums[-1] if nums else "?"
-                print(f"[PDF] Fallback → Puesto: {puesto}, Tanda: {tanda}")
-                return puesto, tanda, line
+        # --- Estrategia C: buscar en ventana de ±2 líneas ---
+        for i, line in enumerate(lines):
+            if TARGET_NFED not in line:
+                continue
+            window = lines[max(0, i-2):i+3]
+            combined = " ".join(window)
+            print(f"[PDF] Estrategia C, ventana: {combined!r}")
+            nums = re.findall(r"\d+", combined)
+            nfed_idx = next((j for j, n in enumerate(nums) if n == TARGET_NFED), -1)
+            puesto = nums[nfed_idx - 1] if nfed_idx > 0 else None
+            tanda  = next((n for n in reversed(nums) if int(n) <= 20 and n != puesto), None)
+            print(f"[PDF] Estrategia C → Puesto: {puesto}, Tanda: {tanda}")
+            return puesto, tanda, line
 
     return None
 
@@ -138,21 +152,6 @@ async def run():
             # 4. Entrar a la página de la competición
             await page.goto(competition_url, wait_until="networkidle")
 
-            # Screenshot de la página de la competición → Telegram para debug visual
-            await page.screenshot(path="/tmp/comp_page.png", full_page=True)
-            try:
-                send_telegram_photo("/tmp/comp_page.png", "📄 Página de la competición")
-            except Exception:
-                pass
-
-            # Log de todos los inputs y botones
-            for el in await page.query_selector_all("input, button, a[href='#']"):
-                tag  = await el.evaluate("e => e.tagName.toLowerCase()")
-                name = (await el.get_attribute("name")) or ""
-                typ  = (await el.get_attribute("type")) or ""
-                txt  = ((await el.inner_text()) or "").strip()
-                href = (await el.get_attribute("href")) or ""
-                print(f"  [{tag}] type={typ!r} name={name!r} text={txt!r} href={href!r}")
 
             # 5. Descargar el PDF interceptando la descarga del navegador
             # Solo se consideran links del propio dominio fmto.net (no externos como phoca.cz)
