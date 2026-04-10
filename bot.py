@@ -110,27 +110,9 @@ async def run():
             await page.fill('input[name="username"]', FMTO_USER)
             await page.fill('input[name="password"]', FMTO_PASS)
 
-            # Intentar submit: primero click en botón, luego Enter como fallback
-            btn = await page.query_selector('button[type="submit"]')
-            if btn:
-                await btn.click()
-                print("  Submit vía button[type=submit]")
-            else:
-                await page.keyboard.press("Enter")
-                print("  Submit vía Enter (botón no encontrado)")
-
-            await page.wait_for_timeout(5000)
-
-            # Si seguimos en login, tomar screenshot y abortar con info útil
-            if "acceso-federados" in page.url:
-                await page.screenshot(path="/tmp/login_debug.png")
-                try:
-                    send_telegram_photo("/tmp/login_debug.png", "🔍 Debug: pantalla tras intento de login")
-                except Exception:
-                    pass
-                raise Exception(
-                    f"Login fallido: URL={page.url} — revisa FMTO_USER y FMTO_PASS en los secrets de GitHub."
-                )
+            # Esperar la navegación que ocurre tras el submit
+            async with page.expect_navigation(wait_until="networkidle", timeout=15000):
+                await page.click('button[type="submit"]')
 
             print(f"Sesión iniciada. URL actual: {page.url}")
 
