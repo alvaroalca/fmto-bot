@@ -16,7 +16,7 @@ jobs:
           python-version: '3.9'
       - name: Instalar dependencias
         run: |
-          pip install playwright requests
+          pip install playwright requests pypdf
           playwright install chromium
       - name: Ejecutar bot
         env:
