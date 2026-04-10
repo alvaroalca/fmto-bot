@@ -42,9 +42,13 @@ def send_telegram_photo(path, caption=""):
 def parse_pdf(pdf_bytes):
     """Devuelve (puesto, tanda, linea_raw) para el tirador con TARGET_NFED.
 
-    Formato del PDF (columnas de derecha a izquierda en el texto extraído):
-      MODALIDAD  NFed  Nivel  Categoría  Puesto  Tanda
-    Los dos últimos números de la línea son siempre Puesto y Tanda.
+    El PDF tiene el formato (sin espacios entre columnas):
+      MODALIDAD + NFed + Nivel(1 dígito) + Categoría(texto) + Puesto + Tanda
+    Ejemplo: 'PISTOLA AIRE 10 M652263SENIOR61'
+      → NFed=65226, Nivel=3, Cat=SENIOR, Puesto=6, Tanda=1
+
+    Estrategia: tomar el sufijo tras el NFed, coger el último bloque de dígitos
+    (puesto+tanda concatenados) y separar: último dígito = tanda, el resto = puesto.
     """
     reader = PdfReader(io.BytesIO(pdf_bytes))
 
@@ -59,13 +63,22 @@ def parse_pdf(pdf_bytes):
         for line in lines:
             if TARGET_NFED not in line:
                 continue
-            nums = re.findall(r"\d+", line)
-            if len(nums) < 2:
-                continue
-            tanda  = nums[-1]
-            puesto = nums[-2]
+
             print(f"[PDF] Línea: {line!r}")
-            print(f"[PDF] Números: {nums} → Puesto={puesto}, Tanda={tanda}")
+
+            # Texto tras el N Fed: p.ej. '3SENIOR61'
+            suffix = line[line.index(TARGET_NFED) + len(TARGET_NFED):]
+
+            # Último bloque de dígitos al final del sufijo: p.ej. '61'
+            m = re.search(r"(\d+)$", suffix)
+            if not m or len(m.group(1)) < 2:
+                continue
+
+            combined = m.group(1)       # '61'
+            tanda    = combined[-1]     # '1'
+            puesto   = combined[:-1]    # '6'
+
+            print(f"[PDF] Sufijo={suffix!r} → combined={combined!r} → Puesto={puesto}, Tanda={tanda}")
             return puesto, tanda, line
 
     return None
