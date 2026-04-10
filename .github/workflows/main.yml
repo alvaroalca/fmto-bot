@@ -1,0 +1,27 @@
+name: Ejecutar Bot FMTO
+on:
+  schedule:
+    - cron: '0 9,15 * * *' # Se ejecuta a las 9:00 y a las 15:00 todos los días
+  workflow_dispatch: # Permite ejecutarlo a mano para probar
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v3
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Instalar dependencias
+        run: |
+          pip install playwright requests
+          playwright install chromium
+      - name: Ejecutar bot
+        env:
+          FMTO_USER: ${{ secrets.FMTO_USER }}
+          FMTO_PASS: ${{ secrets.FMTO_PASS }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python bot.py
