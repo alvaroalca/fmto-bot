@@ -1,0 +1,39 @@
+name: Puntuaciones Wirtex
+
+on:
+  schedule:
+    - cron: '0 9 * * 0'   # Domingo 11:00 CEST (UTC+2)
+    - cron: '30 10 * * 0'  # Domingo 12:30 CEST
+    - cron: '0 12 * * 0'   # Domingo 14:00 CEST
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: write
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: |
+          pip install playwright requests
+          playwright install chromium --with-deps
+
+      - name: Ejecutar bot puntuaciones
+        env:
+          WIRTEX_USER: ${{ secrets.WIRTEX_USER }}
+          WIRTEX_PASS: ${{ secrets.WIRTEX_PASS }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LAST_SCORES: ${{ vars.LAST_SCORES }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python scores.py
