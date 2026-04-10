@@ -10,6 +10,9 @@ FMTO_USER        = os.getenv("FMTO_USER")
 FMTO_PASS        = os.getenv("FMTO_PASS")
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+LAST_COMPETITION = os.getenv("LAST_COMPETITION", "")   # última tirada ya notificada
+GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "") # p.ej. "alvaroalca/fmto-bot"
 
 BASE_URL    = "https://www.fmto.net"
 TARGET_NFED = "65226"
@@ -34,6 +37,31 @@ def send_telegram_photo(path, caption=""):
     with open(path, "rb") as f:
         r = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption}, files={"photo": f})
     print(f"[Telegram foto] status={r.status_code} respuesta={r.text[:200]}")
+
+
+# ---------------------------------------------------------------------------
+# Memoria: variable del repositorio en GitHub Actions
+# ---------------------------------------------------------------------------
+def save_last_competition(url):
+    """Guarda la URL de la competición notificada como variable del repo."""
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        print("[Memoria] Sin GITHUB_TOKEN/REPOSITORY, no se puede guardar.")
+        return
+    api = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables/LAST_COMPETITION"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    # Intentar actualizar (PATCH); si no existe, crear (POST)
+    r = requests.patch(api, json={"name": "LAST_COMPETITION", "value": url}, headers=headers)
+    if r.status_code == 404:
+        r = requests.post(
+            f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables",
+            json={"name": "LAST_COMPETITION", "value": url},
+            headers=headers,
+        )
+    print(f"[Memoria] Guardada competición: {url} (status={r.status_code})")
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +152,13 @@ async def run():
 
             if not competition_url:
                 raise Exception("No se encontró ninguna PREPARATORIA PISTOLA AIRE 10M en la lista.")
+
+            # ¿Es una tirada nueva?
+            if competition_url == LAST_COMPETITION:
+                print(f"Sin cambios: esta tirada ya fue notificada ({competition_url}). Nada que hacer.")
+                return
+
+            print(f"¡Nueva tirada detectada! Procesando...")
 
             # 4. Entrar a la página de la competición
             await page.goto(competition_url, wait_until="networkidle")
@@ -224,6 +259,7 @@ def _notify(result, competition_url):
     )
     send_telegram(msg)
     print(f"Resultado enviado → Puesto: {puesto} | Tanda: {tanda}")
+    save_last_competition(competition_url)
 
 
 if __name__ == "__main__":
