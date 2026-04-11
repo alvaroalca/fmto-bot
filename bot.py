@@ -193,6 +193,17 @@ async def run():
                 page_text = await page.inner_text("body")
                 text_upper = page_text.upper()
                 target_upper = TARGET_NAME.upper()
+                # DEBUG: imprimir todas las ocurrencias con contexto amplio
+                start = 0
+                occ = 0
+                while True:
+                    idx = text_upper.find(target_upper, start)
+                    if idx == -1:
+                        break
+                    occ += 1
+                    fragment = page_text[max(0, idx - 200): idx + 400]
+                    print(f"[DEBUG ocurrencia {occ}]\n{repr(fragment)}\n---")
+                    start = idx + 1
                 # Buscar TODAS las ocurrencias del nombre; quedarse con la que
                 # tenga "Tanda N" cerca (la fila de la tabla, no el menú/bienvenida)
                 start = 0
