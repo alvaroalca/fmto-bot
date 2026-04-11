@@ -192,7 +192,7 @@ async def run():
             await page.wait_for_timeout(2000)
 
             page_text = await page.inner_text("body")
-            print(f"[InscripcionVer (600)]:\n{page_text[:600]}")
+            print(f"[InscripcionVer FULL]:\n{repr(page_text)}")
 
             # 5. Extraer Tanda y Puesto
             tanda_m  = re.search(r'Tanda\s*[:\-]?\s*(\d+)', page_text, re.IGNORECASE)
