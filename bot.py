@@ -10,9 +10,10 @@ FMTO_USER        = os.getenv("FMTO_USER")
 FMTO_PASS        = os.getenv("FMTO_PASS")
 TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-LAST_COMPETITION = os.getenv("LAST_COMPETITION", "")   # última tirada ya notificada
-GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
-GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "") # p.ej. "alvaroalca/fmto-bot"
+GITHUB_TOKEN      = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")
+
+MEMORY_FILE = ".github/last_competition.txt"
 
 BASE_URL    = "https://www.fmto.net"
 TARGET_NFED = "65226"
@@ -40,28 +41,41 @@ def send_telegram_photo(path, caption=""):
 
 
 # ---------------------------------------------------------------------------
-# Memoria: variable del repositorio en GitHub Actions
+# Memoria (fichero en el repo via GitHub Contents API)
 # ---------------------------------------------------------------------------
-def save_last_competition(url):
-    """Guarda la URL de la competición notificada como variable del repo."""
-    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
-        print("[Memoria] Sin GITHUB_TOKEN/REPOSITORY, no se puede guardar.")
-        return
-    api = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables/LAST_COMPETITION"
-    headers = {
+def _gh_headers():
+    return {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    # Intentar actualizar (PATCH); si no existe, crear (POST)
-    r = requests.patch(api, json={"name": "LAST_COMPETITION", "value": url}, headers=headers)
-    if r.status_code == 404:
-        r = requests.post(
-            f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables",
-            json={"name": "LAST_COMPETITION", "value": url},
-            headers=headers,
-        )
-    print(f"[Memoria] Guardada competición: {url} (status={r.status_code})")
+
+def load_last_competition():
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        return ""
+    api = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/{MEMORY_FILE}"
+    r = requests.get(api, headers=_gh_headers())
+    if r.status_code == 200:
+        import base64
+        return base64.b64decode(r.json()["content"]).decode().strip()
+    return ""
+
+def save_last_competition(url):
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        print("[Memoria] Sin token/repo.")
+        return
+    import base64
+    api = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/{MEMORY_FILE}"
+    r = requests.get(api, headers=_gh_headers())
+    sha = r.json().get("sha") if r.status_code == 200 else None
+    data = {
+        "message": f"chore: last_competition={url}",
+        "content": base64.b64encode(url.encode()).decode(),
+    }
+    if sha:
+        data["sha"] = sha
+    r = requests.put(api, json=data, headers=_gh_headers())
+    print(f"[Memoria] last_competition={url!r} → {'OK' if r.status_code in (200,201) else f'ERROR {r.status_code}'}")
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +130,9 @@ def parse_pdf(pdf_bytes):
 # Main
 # ---------------------------------------------------------------------------
 async def run():
+    last_competition = load_last_competition()
+    print(f"[Memoria] Última competición: {last_competition!r}")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         context = await browser.new_context(viewport={"width": 1920, "height": 1080})
@@ -154,7 +171,7 @@ async def run():
                 raise Exception("No se encontró ninguna PREPARATORIA PISTOLA AIRE 10M en la lista.")
 
             # ¿Es una tirada nueva?
-            if competition_url == LAST_COMPETITION:
+            if competition_url == last_competition:
                 print(f"Sin cambios: esta tirada ya fue notificada ({competition_url}). Nada que hacer.")
                 return
 

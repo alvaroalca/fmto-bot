@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      actions: write   # necesario para actualizar variables del repositorio
+      contents: write
     steps:
       - name: Descargar código
         uses: actions/checkout@v4
@@ -29,7 +29,6 @@ jobs:
           FMTO_PASS: ${{ secrets.FMTO_PASS }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          LAST_COMPETITION: ${{ vars.LAST_COMPETITION }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: python bot.py
