@@ -46,13 +46,15 @@ def save_last_scores(key):
         "X-GitHub-Api-Version": "2022-11-28",
     }
     r = requests.patch(api, json={"name": "LAST_SCORES", "value": key}, headers=headers)
+    print(f"[Memoria PATCH] status={r.status_code} body={r.text[:300]}")
     if r.status_code in (404, 403):
         r = requests.post(
             f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables",
             json={"name": "LAST_SCORES", "value": key},
             headers=headers,
         )
-    print(f"[Memoria] LAST_SCORES={key!r} (status={r.status_code})")
+        print(f"[Memoria POST]  status={r.status_code} body={r.text[:300]}")
+    print(f"[Memoria] LAST_SCORES={key!r} → {'OK' if r.status_code in (200,201,204) else 'ERROR'}")
 
 
 # ---------------------------------------------------------------------------
