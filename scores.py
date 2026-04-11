@@ -300,6 +300,10 @@ async def run():
             print(f"  Series extraídas: {len(series)}")
 
             # 9. Construir y enviar mensaje
+            if total == "?" or not series:
+                print("Resultados aún no disponibles, se reintentará en el próximo disparo.")
+                return
+
             score_key = f"{fecha_comp}_{total}"
             if score_key == last_scores:
                 print(f"Sin cambios: {score_key} ya notificado.")
