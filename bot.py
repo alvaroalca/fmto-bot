@@ -159,129 +159,46 @@ async def run():
             comp_id   = comp_info["id"]
             print(f"  Próxima competición: {comp_date} (ID={comp_id})")
 
-            # 3. Cambiar a interfaz clásica y navegar a Mis Competiciones
-            print("Cambiando a interfaz clásica...")
-            await page.goto("https://www.wirtexsports.com/Publica/GLB/HomePub?MOBILE=NO",
-                            wait_until="networkidle")
-            await page.wait_for_timeout(2000)
-            print(f"  URL clásica: {page.url}")
+            # 3. Navegar al detalle móvil para obtener pCodInscripcion
+            mobile_det = f"https://www.wirtexsports.com/Mobile/GLB/Competicion/Competicion_Det_Ver/{comp_id}?pCodInscripcion=0"
+            await page.goto(mobile_det, wait_until="networkidle")
+            await page.wait_for_timeout(1500)
 
-            # Interceptar respuestas AJAX para capturar el HTML cargado dinámicamente
-            ajax_html = {}
-            async def on_response(response):
-                url = response.url
-                if any(k in url for k in ["CompeticionesMain", "Inscripciones",
-                                           "Competicion_Det", "MisInscripciones"]):
-                    try:
-                        text = await response.text()
-                        ajax_html[url] = text
-                        print(f"  [AJAX] {url} → {len(text)} chars")
-                    except Exception:
-                        pass
-            page.on("response", on_response)
-
-            # DEBUG: imprimir todos los enlaces de nav para encontrar "Mis competiciones"
-            nav_items = await page.evaluate("""
-                () => [...document.querySelectorAll('a, [onclick]')]
-                    .filter(el => el.offsetParent !== null)   // solo visibles
-                    .slice(0, 60)
-                    .map(el => ({
-                        tag: el.tagName,
-                        text: el.innerText.trim().slice(0,60),
-                        href: el.getAttribute('href') || '',
-                        onclick: (el.getAttribute('onclick') || '').slice(0,120),
-                    }))
+            inscripcion_code = await page.evaluate("""
+                () => {
+                    const btns = [...document.querySelectorAll('[onclick]')];
+                    for (const btn of btns) {
+                        const oc = btn.getAttribute('onclick') || '';
+                        const m = oc.match(/pCodInscripcion=(\\d+)/);
+                        if (m && m[1] !== '0') return m[1];
+                    }
+                    return null;
+                }
             """)
-            print("[DEBUG nav inicial]")
-            for it in nav_items:
-                print(f"  {it['tag']} | {it['text']!r} | href={it['href']} | oc={it['onclick']}")
 
-            # Intentar navegar a "Mis competiciones" haciendo click en el menú
-            # 1) Buscar enlace cuyo texto sea "Competiciones" y clickar
-            comp_menu = await page.query_selector(
-                'a:has-text("Competiciones"), li:has-text("Competiciones") > a')
-            if comp_menu:
-                await comp_menu.click()
-                await page.wait_for_timeout(1500)
-                print("  Clickado menú Competiciones")
-
-            # 2) Buscar "Mis competiciones" o "Mis inscripciones" en el submenú
-            mis_link = await page.query_selector(
-                'a:has-text("Mis competiciones"), a:has-text("Mis Competiciones"), '
-                'a:has-text("Mis inscripciones"), a:has-text("MisCompeticiones")')
-            if mis_link and await mis_link.is_visible():
-                await mis_link.click()
-                await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(2000)
-                print("  Clickado Mis competiciones")
-
-            # DEBUG: imprimir links visibles después del click
-            after_items = await page.evaluate("""
-                () => [...document.querySelectorAll('a, [onclick]')]
-                    .filter(el => el.offsetParent !== null)
-                    .slice(0, 60)
-                    .map(el => ({
-                        text: el.innerText.trim().slice(0,60),
-                        href: el.getAttribute('href') || '',
-                        onclick: (el.getAttribute('onclick') || '').slice(0,120),
-                    }))
-            """)
-            print("[DEBUG nav tras click]")
-            for it in after_items:
-                print(f"  {it['text']!r} | href={it['href']} | oc={it['onclick']}")
-
-            # Esperar posibles cargas AJAX adicionales
-            await page.wait_for_timeout(2000)
-
-            # 4. Buscar en el contenido de la página / respuestas AJAX
-            page_text  = await page.inner_text("body")
-            # Combinar con todo el HTML de respuestas AJAX capturadas
-            full_text  = page_text + "\n" + "\n".join(ajax_html.values())
-            text_upper = full_text.upper()
-            target_upper = TARGET_NAME.upper()
-
-            # DEBUG
-            start, occ = 0, 0
-            while True:
-                idx = text_upper.find(target_upper, start)
-                if idx == -1:
-                    break
-                occ += 1
-                frag = full_text[max(0, idx-200): idx+400]
-                print(f"[DEBUG nombre ocurrencia {occ}]\n{repr(frag)}\n---")
-                start = idx + 1
-            if occ == 0:
-                print(f"[DEBUG] Nombre no encontrado. Page (600):\n{page_text[:600]}")
-
-            # Buscar ocurrencia con Tanda/Puesto cerca
-            found_text = ""
-            start = 0
-            while True:
-                idx = text_upper.find(target_upper, start)
-                if idx == -1:
-                    break
-                fragment = full_text[max(0, idx-200): idx+400]
-                if re.search(r'Tanda\s*[:\-]?\s*\d+|Puesto\s*[:\-]?\s*\d+', fragment, re.IGNORECASE):
-                    found_text = fragment
-                    break
-                start = idx + 1
-
-            if not found_text:
-                print(f"No se encontró {TARGET_NAME} con Tanda/Puesto asignado.")
+            if not inscripcion_code:
+                print("No se encontró pCodInscripcion. ¿Sin inscripción en esta competición?")
                 return
 
-            print(f"[Encontrado] Fragmento:\n{found_text}")
+            print(f"  pCodInscripcion: {inscripcion_code}")
+
+            # 4. Navegar directamente a la ficha de inscripción (clásica)
+            #    Este endpoint devuelve los datos del inscrito: Tanda, Puesto, etc.
+            inscripcion_url = (
+                f"https://www.wirtexsports.com/Publica/GLB/Competicion/"
+                f"co_prec_InscripcionVer/{inscripcion_code}"
+            )
+            await page.goto(inscripcion_url, wait_until="networkidle")
+            await page.wait_for_timeout(2000)
+
+            page_text = await page.inner_text("body")
+            print(f"[InscripcionVer (600)]:\n{page_text[:600]}")
 
             # 5. Extraer Tanda y Puesto
-            tanda_m  = re.search(r'Tanda\s*[:\-]?\s*(\d+)', found_text, re.IGNORECASE)
-            puesto_m = re.search(r'Puesto\s*[:\-]?\s*(\d+)', found_text, re.IGNORECASE)
+            tanda_m  = re.search(r'Tanda\s*[:\-]?\s*(\d+)', page_text, re.IGNORECASE)
+            puesto_m = re.search(r'Puesto\s*[:\-]?\s*(\d+)', page_text, re.IGNORECASE)
             tanda  = tanda_m.group(1)  if tanda_m  else "?"
             puesto = puesto_m.group(1) if puesto_m else "?"
-
-            if puesto == "?":
-                name_idx    = found_text.upper().index(target_upper)
-                nums_before = re.findall(r'\b(\d+)\b', found_text[:name_idx])
-                puesto = nums_before[-1] if nums_before else "?"
 
             print(f"  Tanda={tanda}  Puesto={puesto}")
 
