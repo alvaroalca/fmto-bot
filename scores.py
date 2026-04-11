@@ -15,7 +15,7 @@ GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")
 
 WIRTEX_URL    = "https://www.wirtexsports.com"
 COMP_KEYWORD  = "PISTOLA AIRE 10 METROS"
-TARGET_NAME   = "ALCARAZ"   # busca "ALVARO ALCARAZ" en resultados
+TARGET_NAME   = "ALVARO ALCARAZ"
 
 
 # ---------------------------------------------------------------------------
