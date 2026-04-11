@@ -191,17 +191,77 @@ async def run():
             await page.goto(inscripcion_url, wait_until="networkidle")
             await page.wait_for_timeout(2000)
 
+            # 5. En InscripcionVer hay un botón "Resultados" cuyo onclick contiene
+            #    la URL de co_prec_PuntuacionesIndex con piCod_CoPru.
+            #    Extraemos esa URL y navegamos ahí para obtener Tanda y Puesto.
+            puntuaciones_path = await page.evaluate("""
+                () => {
+                    const els = [...document.querySelectorAll('[onclick], a[href]')];
+                    for (const el of els) {
+                        const src = (el.getAttribute('onclick') || '') +
+                                    (el.getAttribute('href') || '');
+                        const m = src.match(/\\/Publica\\/GLB\\/Competicion\\/co_prec_PuntuacionesIndex[^'"\\s]*/);
+                        if (m) return m[0];
+                    }
+                    return null;
+                }
+            """)
+
+            if not puntuaciones_path:
+                # Fallback: buscar en el HTML fuente
+                html_src = await page.content()
+                m = re.search(r'/Publica/GLB/Competicion/co_prec_PuntuacionesIndex[^\'"\\s]+',
+                              html_src)
+                puntuaciones_path = m.group(0) if m else None
+
+            if not puntuaciones_path:
+                print("No se encontró enlace a Puntuaciones desde InscripcionVer.")
+                return
+
+            puntuaciones_url = "https://www.wirtexsports.com" + puntuaciones_path
+            print(f"  URL puntuaciones: {puntuaciones_url}")
+
+            # 6. Navegar a la página de puntuaciones y buscar TARGET_NAME
+            await page.goto(puntuaciones_url, wait_until="networkidle")
+            await page.wait_for_timeout(3000)
+
+            # La tabla se carga vía AJAX (jqGrid); esperar y leer
             page_text = await page.inner_text("body")
 
-            # 5. Extraer Tanda y Puesto — campos: "Nº Tanda inicial\n<valor>"
-            tanda_m  = re.search(r'Nº Tanda inicial\s*\n\s*(\d+)', page_text, re.IGNORECASE)
-            puesto_m = re.search(r'Nº Puesto inicial\s*\n\s*(\d+)', page_text, re.IGNORECASE)
-            tanda  = tanda_m.group(1)  if tanda_m  else None
-            puesto = puesto_m.group(1) if puesto_m else None
+            # Buscar "ALVARO ALCARAZ" en la tabla paginada (máx. 20 páginas)
+            found_row = ""
+            for _ in range(20):
+                text_upper = page_text.upper()
+                idx = text_upper.find(TARGET_NAME.upper())
+                if idx != -1:
+                    found_row = page_text[max(0, idx - 100): idx + 300]
+                    break
+                # Siguiente página del jqGrid
+                next_btn = await page.query_selector(
+                    'td[id$="_next"], a[id$="_next"], [title="Next Page"], '
+                    'input[value=">"], button:has-text(">")')
+                if not next_btn or not await next_btn.is_visible():
+                    break
+                await next_btn.click()
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(1500)
+                page_text = await page.inner_text("body")
 
-            if tanda is None or puesto is None:
-                print("Tanda/Puesto aún no asignados por la organización. Se reintentará.")
+            if not found_row:
+                print(f"No se encontró {TARGET_NAME} en la tabla de puntuaciones.")
                 return
+
+            print(f"[Puntuaciones] Fragmento:\n{found_row}")
+
+            # 7. Extraer Tanda y Puesto del fragmento
+            #    Formato: "Prueba - Tanda 1 ... Puesto 6"
+            tanda_m  = re.search(r'Tanda\s+(\d+)', found_row, re.IGNORECASE)
+            puesto_m = re.search(r'Puesto\s+(\d+)', found_row, re.IGNORECASE)
+
+            # Fallback: la columna Puesto es un número aislado en la fila
+            nums = re.findall(r'\b(\d+)\b', found_row)
+            tanda  = tanda_m.group(1)  if tanda_m  else "?"
+            puesto = puesto_m.group(1) if puesto_m else (nums[-1] if nums else "?")
 
             print(f"  Tanda={tanda}  Puesto={puesto}")
 
