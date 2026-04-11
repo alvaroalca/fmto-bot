@@ -168,29 +168,28 @@ async def run():
                 raise Exception("Login fallido en Wirtex: sigue mostrando usuario invitado.")
             print(f"Sesión iniciada. URL: {page.url}")
 
-            # 2. Ir a Competiciones → Mis competiciones
-            # La página puede estar en inglés (Competitions / My competitions)
-            # o en español (Competiciones / Mis competiciones)
+            # 2. Cambiar a interfaz desktop (misma sesión, cookies compartidas)
+            print("Cambiando a interfaz desktop...")
+            await page.goto("https://www.wirtexsports.com/Publica/GLB/HomePub",
+                            wait_until="networkidle")
+            await page.wait_for_timeout(2000)
+            body = await page.inner_text("body")
+            if "INVITADO" in body.upper() or "GUEST" in body.upper():
+                raise Exception("Sesión no válida en interfaz desktop")
+            print(f"Desktop OK. URL: {page.url}")
+
+            # 3. Navegar a Competiciones → Mis competiciones
             print("Navegando a Mis competiciones...")
-
-            # Debug: ver todos los links del menú
-            for lnk in await page.query_selector_all("nav a, .nav a, .menu a, header a"):
-                print(f"  [nav] {((await lnk.inner_text()) or '').strip()!r} → {await lnk.get_attribute('href')!r}")
-
-            # Clic en menú Competiciones / Competitions
-            for sel in ['a:has-text("Competiciones")', 'button:has-text("Competiciones")',
-                        'a:has-text("Competitions")', 'button:has-text("Competitions")',
-                        'span:has-text("Competiciones")', 'span:has-text("Competitions")']:
+            for sel in ['a:has-text("Competiciones")', 'span:has-text("Competiciones")',
+                        'a:has-text("Competitions")']:
                 el = await page.query_selector(sel)
                 if el and await el.is_visible():
                     await el.click()
-                    print(f"  Menú principal con: {sel}")
+                    print(f"  Menú Competiciones con: {sel}")
                     await page.wait_for_timeout(1000)
                     break
 
-            # Clic en Mis competiciones / My competitions
             for sel in ['a:has-text("Mis competiciones")', 'a:has-text("My competitions")',
-                        'button:has-text("Mis competiciones")', 'button:has-text("My competitions")',
                         'a:has-text("My Competitions")']:
                 el = await page.query_selector(sel)
                 if el and await el.is_visible():
@@ -200,18 +199,14 @@ async def run():
 
             await page.wait_for_load_state("networkidle")
             await page.wait_for_timeout(2000)
-            print(f"URL tras navegación: {page.url}")
+            print(f"URL tras nav: {page.url}")
 
-            # Debug: imprimir texto de la página para ver la tabla
-            body_text = await page.inner_text("body")
-            print(f"[Debug] Primeros 1500 chars:\n{body_text[:1500]}")
-
-            # 3. Buscar la competición PISTOLA AIRE 10M más reciente YA PASADA
-            rows = await page.query_selector_all("tr, .competition-row, .list-item, li")
-            target_row = None
-            comp_date  = None
+            # 4. Buscar la competición más reciente YA PASADA con botón de resultados
             today = date.today()
+            comp_date   = None
+            results_btn = None
 
+            rows = await page.query_selector_all("tr")
             for row in rows:
                 text = (await row.inner_text()).upper()
                 if COMP_KEYWORD not in text or "PREPARATORIA" not in text:
@@ -220,110 +215,141 @@ async def run():
                 if not date_m:
                     continue
                 try:
-                    row_date = date(int(date_m.group(3)), int(date_m.group(2)), int(date_m.group(1)))
+                    row_date = date(int(date_m.group(3)),
+                                   int(date_m.group(2)),
+                                   int(date_m.group(1)))
                 except ValueError:
                     continue
                 if row_date > today:
-                    print(f"  Saltando competición futura: {date_m.group(0)}")
+                    print(f"  Saltando futura: {date_m.group(0)}")
                     continue
-                target_row = row
-                comp_date  = date_m.group(0)
-                print(f"  Competición encontrada: {(await row.inner_text())[:150]!r}")
-                break  # la lista está ordenada desc, la primera pasada es la más reciente
 
-            if not target_row:
-                print("No se encontró ninguna competición pasada. ¿Aún no publicada?")
-                return
+                # En el desktop cada fila tiene iconos-link sin texto (los botones de acción)
+                # El segundo icono es el de resultados (el primero es inscripción)
+                btns = await row.query_selector_all("a, button")
+                print(f"  [{date_m.group(0)}] {len(btns)} botones en fila")
+                for b in btns:
+                    href = (await b.get_attribute("href")) or ""
+                    cls  = (await b.get_attribute("class")) or ""
+                    txt  = ((await b.inner_text()) or "").strip()
+                    print(f"    btn: text={txt!r} href={href!r} class={cls[:50]!r}")
 
-            # 4. Comprobar si ya fue notificada
-            if comp_date and comp_date == LAST_SCORES:
-                print(f"Sin cambios: puntuaciones del {comp_date} ya notificadas.")
-                return
-
-            # 5. Buscar el botón/enlace de resultados en la fila
-            # Debug: listar TODOS los links de la página
-            all_links = await page.query_selector_all("a[href]")
-            for lnk in all_links:
-                href = (await lnk.get_attribute("href")) or ""
-                txt  = ((await lnk.inner_text()) or "").strip()
-                print(f"  [page link] text={txt[:50]!r} href={href!r}")
-
-            results_el = None
-            for sel in ['a:has-text("Resultados")', 'button:has-text("Resultados")',
-                        'a:has-text("Ver resultados")', 'a[href*="result" i]',
-                        'a[href*="Resultado" i]', 'a[href*="Puntuacion" i]',
-                        'a[href*="Score" i]']:
-                results_el = await target_row.query_selector(sel)
-                if results_el:
-                    print(f"  Enlace resultados con: {sel}")
+                if len(btns) >= 2:
+                    results_btn = btns[1]   # segundo icono = resultados
+                    comp_date   = date_m.group(0)
+                    print(f"  Competición con resultados: {comp_date}")
                     break
+                else:
+                    print(f"  Sin resultados aún: {date_m.group(0)}")
 
-            if not results_el:
-                print("No hay enlace de resultados en la fila (¿no publicados aún?)")
+            if not results_btn:
+                print("No se encontró competición pasada con resultados.")
                 return
 
-            await results_el.click()
+            # 5. Comprobar si ya fue notificada
+            if comp_date == LAST_SCORES:
+                print(f"Sin cambios: {comp_date} ya notificado.")
+                return
+
+            # 6. Abrir página de resultados
+            await results_btn.click()
             await page.wait_for_load_state("networkidle")
             await page.wait_for_timeout(2000)
-            print(f"En resultados. URL: {page.url}")
+            print(f"Página resultados cargada.")
 
-            # Debug
-            page_text = await page.inner_text("body")
-            print(f"[Debug resultados] Primeros 1500 chars:\n{page_text[:1500]}")
+            # 7. Buscar TARGET_NAME paginando si es necesario
+            found = False
+            for _ in range(10):   # máximo 10 páginas
+                page_text = await page.inner_text("body")
+                if TARGET_NAME.upper() in page_text.upper():
+                    found = True
+                    break
+                # Ir a siguiente página
+                next_btn = None
+                for sel in ['a:has-text("›")', 'a:has-text(">")',
+                            'a[title="siguiente"]', 'a.next']:
+                    nb = await page.query_selector(sel)
+                    if nb and await nb.is_visible():
+                        next_btn = nb
+                        break
+                if not next_btn:
+                    break
+                await next_btn.click()
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(1000)
 
-            if TARGET_NAME.upper() not in page_text.upper():
-                print(f"No se encontró {TARGET_NAME} en resultados (¿no publicados?)")
+            if not found:
+                print(f"No se encontró {TARGET_NAME} en los resultados.")
                 return
 
-            # 6. Extraer clasificaciones
-            clasif_parts = re.findall(r'Clasif\.\s+([^:()]+)[:\s]+(\d+)', page_text, re.IGNORECASE)
-            clasif_str = "  ".join([f"{k.strip()}: {v}º" for k, v in clasif_parts]) if clasif_parts else ""
-            print(f"  Clasificaciones: {clasif_str}")
+            # 8. Extraer clasificaciones, puesto, total, tanda de la zona del tirador
+            # El texto del área de ALCARAZ tiene el formato:
+            # "ALVARO ALCARAZ PEREZ (Clasif. SENIOR: N) ... Prueba - Tanda N fecha fecha puesto total clasif"
+            idx = page_text.upper().index(TARGET_NAME.upper())
+            snippet = page_text[max(0, idx-50): idx+600]
+            print(f"[Snippet tirador]\n{snippet}")
 
-            # 7. Extraer puesto, total, X's de la fila del tirador
-            # Formato: "Prueba - Tanda N | fecha | fecha | puesto | total | xs"
-            puesto = total = xs = fecha_comp = "?"
-            prueba_m = re.search(
-                r'Prueba[^\n]*Tanda\s*\d+[^\n]*?(\d{2}/\d{2}/\d{4})[^\n]*?(\d+)\s+(\d{3})\s+(\d+)',
-                page_text, re.IGNORECASE
+            clasif_parts = re.findall(
+                r'Clasif\.\s+([A-ZÁ-Ú /ª0-9]+?)\s*[:]\s*(\d+)',
+                snippet, re.IGNORECASE
             )
-            if prueba_m:
-                fecha_comp = prueba_m.group(1)
-                puesto     = prueba_m.group(2)
-                total      = prueba_m.group(3)
-                xs         = prueba_m.group(4)
-                print(f"  Fecha={fecha_comp} Puesto={puesto} Total={total} X's={xs}")
-            else:
-                fecha_comp = comp_date or "?"
-                print("  No se pudo parsear fila de puntuación, buscando números...")
-                nums = re.findall(r'\b(\d{3})\b', page_text)
-                if nums:
-                    total = nums[0]
+            clasif_str = "  |  ".join(
+                [f"{k.strip()}: {v}º" for k, v in clasif_parts]
+            ) if clasif_parts else ""
 
-            # 8. Clic en Detalles para el desglose de series
-            detalles_el = None
-            for sel in ['button:has-text("Detalles")', 'a:has-text("Detalles")',
-                        'button:has-text("Ver detalles")', 'span:has-text("Detalles")']:
-                detalles_el = await page.query_selector(sel)
-                if detalles_el:
-                    print(f"  Botón detalles con: {sel}")
+            # Fila de datos: "Prueba - Tanda N DD/MM/YYYY ... puesto total clasif"
+            prueba_m = re.search(
+                r'Prueba\s*-\s*Tanda\s*(\d+)[^\d]*(\d{2}/\d{2}/\d{4})[^\d]+(\d+)\s+(\d{3,})\s+(\d+)',
+                snippet, re.IGNORECASE
+            )
+            tanda = puesto = total = xs = "?"
+            fecha_comp = comp_date or "?"
+            if prueba_m:
+                tanda      = prueba_m.group(1)
+                fecha_comp = prueba_m.group(2)
+                puesto     = prueba_m.group(3)
+                total      = prueba_m.group(4)
+                xs         = prueba_m.group(5)
+                print(f"  Tanda={tanda} Fecha={fecha_comp} Puesto={puesto} "
+                      f"Total={total} Clasif={xs}")
+
+            # 9. Clic en botón expandir (+) de la fila del tirador para ver tiros
+            # El botón + está en la fila del nombre del tirador
+            archer_row = None
+            all_rows = await page.query_selector_all("tr")
+            for row in all_rows:
+                rt = await row.inner_text()
+                if TARGET_NAME.upper() in rt.upper():
+                    archer_row = row
                     break
 
             series = []
-            if detalles_el:
-                await detalles_el.click()
-                await page.wait_for_timeout(2000)
-                detail_text = await page.inner_text("body")
-                print(f"[Debug detalles] Primeros 1000 chars:\n{detail_text[:1000]}")
-                series = parse_series(detail_text)
-                print(f"  Series extraídas: {len(series)}")
-            else:
-                print("  Botón Detalles no encontrado")
+            if archer_row:
+                expand_btn = await archer_row.query_selector("a, button")
+                if expand_btn:
+                    await expand_btn.click()
+                    await page.wait_for_load_state("networkidle")
+                    await page.wait_for_timeout(2000)
+                    detail_text = await page.inner_text("body")
+                    print(f"[Debug detalles] Primeros 800:\n{detail_text[:800]}")
 
-            # 9. Construir y enviar mensaje
+                    # Extraer Nº de 10 interior de la cabecera
+                    xs_m = re.search(r'N[oº]\s*(?:de\s*)?10\s*interior[:\s]+(\d+)',
+                                     detail_text, re.IGNORECASE)
+                    if xs_m:
+                        xs = xs_m.group(1)
+
+                    series = parse_series(detail_text)
+                    print(f"  Series extraídas: {len(series)}")
+                else:
+                    print("  No se encontró botón + en la fila del tirador")
+            else:
+                print("  No se encontró fila del tirador")
+
+            # 10. Construir y enviar mensaje
             score_key = f"{fecha_comp}_{total}"
             if score_key == LAST_SCORES:
-                print(f"Sin cambios: puntuaciones {score_key} ya notificadas.")
+                print(f"Sin cambios: {score_key} ya notificado.")
                 return
 
             msg = build_message(fecha_comp, clasif_str, puesto, total, xs, series)
