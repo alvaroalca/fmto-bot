@@ -282,9 +282,13 @@ async def run():
             print(f"Página resultados cargada.")
 
             # 7. Extraer datos de la página de Puntuación Individual
-            #    (la página ya muestra solo los datos del usuario logueado)
+            #    Hacer scroll hasta el fondo para forzar carga de las 6 series
+            for _ in range(4):
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.wait_for_timeout(800)
+
             page_text = await page.inner_text("body")
-            print(f"[Puntuación] Primeros 800:\n{page_text[:800]}")
+            print(f"[Puntuación] Texto completo ({len(page_text)} chars):\n{page_text}")
 
             # Total (aparece como "Ptos.\n542" — label en línea propia)
             total_m = re.search(r'\bPtos\.\s*\n\s*(\d+)', page_text)
