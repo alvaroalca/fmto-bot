@@ -159,57 +159,108 @@ async def run():
             comp_id   = comp_info["id"]
             print(f"  Próxima competición: {comp_date} (ID={comp_id})")
 
-            # 3. Cambiar a interfaz clásica y navegar a la sección INSCRIPCIONES
-            #    vía la función JS MAIN.doCompeticionesPublicIndexGo
+            # 3. Cambiar a interfaz clásica y navegar a Mis Competiciones
             print("Cambiando a interfaz clásica...")
             await page.goto("https://www.wirtexsports.com/Publica/GLB/HomePub?MOBILE=NO",
                             wait_until="networkidle")
             await page.wait_for_timeout(2000)
             print(f"  URL clásica: {page.url}")
 
-            # Llamar a la función JS que carga la tabla de inscritos (AJAX)
-            await page.evaluate(f"""
-                const fakeEv = {{
-                    preventDefault: function(){{}},
-                    stopPropagation: function(){{}},
-                    target: document.body
-                }};
-                MAIN.doCompeticionesPublicIndexGo(
-                    fakeEv,
-                    '/Publica/GLB/Competicion/CompeticionesMainDetalle',
-                    'INSCRIPCIONES',
-                    {comp_id}, 'P', 'PISTOLA AIRE 10 METROS', true
-                );
+            # Interceptar respuestas AJAX para capturar el HTML cargado dinámicamente
+            ajax_html = {}
+            async def on_response(response):
+                url = response.url
+                if any(k in url for k in ["CompeticionesMain", "Inscripciones",
+                                           "Competicion_Det", "MisInscripciones"]):
+                    try:
+                        text = await response.text()
+                        ajax_html[url] = text
+                        print(f"  [AJAX] {url} → {len(text)} chars")
+                    except Exception:
+                        pass
+            page.on("response", on_response)
+
+            # DEBUG: imprimir todos los enlaces de nav para encontrar "Mis competiciones"
+            nav_items = await page.evaluate("""
+                () => [...document.querySelectorAll('a, [onclick]')]
+                    .filter(el => el.offsetParent !== null)   // solo visibles
+                    .slice(0, 60)
+                    .map(el => ({
+                        tag: el.tagName,
+                        text: el.innerText.trim().slice(0,60),
+                        href: el.getAttribute('href') || '',
+                        onclick: (el.getAttribute('onclick') || '').slice(0,120),
+                    }))
             """)
-            # Esperar a que cargue el AJAX
-            await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(3000)
+            print("[DEBUG nav inicial]")
+            for it in nav_items:
+                print(f"  {it['tag']} | {it['text']!r} | href={it['href']} | oc={it['onclick']}")
 
-            page_text = await page.inner_text("body")
+            # Intentar navegar a "Mis competiciones" haciendo click en el menú
+            # 1) Buscar enlace cuyo texto sea "Competiciones" y clickar
+            comp_menu = await page.query_selector(
+                'a:has-text("Competiciones"), li:has-text("Competiciones") > a')
+            if comp_menu:
+                await comp_menu.click()
+                await page.wait_for_timeout(1500)
+                print("  Clickado menú Competiciones")
 
-            # DEBUG: mostrar fragmentos alrededor del nombre
-            text_upper   = page_text.upper()
+            # 2) Buscar "Mis competiciones" o "Mis inscripciones" en el submenú
+            mis_link = await page.query_selector(
+                'a:has-text("Mis competiciones"), a:has-text("Mis Competiciones"), '
+                'a:has-text("Mis inscripciones"), a:has-text("MisCompeticiones")')
+            if mis_link and await mis_link.is_visible():
+                await mis_link.click()
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(2000)
+                print("  Clickado Mis competiciones")
+
+            # DEBUG: imprimir links visibles después del click
+            after_items = await page.evaluate("""
+                () => [...document.querySelectorAll('a, [onclick]')]
+                    .filter(el => el.offsetParent !== null)
+                    .slice(0, 60)
+                    .map(el => ({
+                        text: el.innerText.trim().slice(0,60),
+                        href: el.getAttribute('href') || '',
+                        onclick: (el.getAttribute('onclick') || '').slice(0,120),
+                    }))
+            """)
+            print("[DEBUG nav tras click]")
+            for it in after_items:
+                print(f"  {it['text']!r} | href={it['href']} | oc={it['onclick']}")
+
+            # Esperar posibles cargas AJAX adicionales
+            await page.wait_for_timeout(2000)
+
+            # 4. Buscar en el contenido de la página / respuestas AJAX
+            page_text  = await page.inner_text("body")
+            # Combinar con todo el HTML de respuestas AJAX capturadas
+            full_text  = page_text + "\n" + "\n".join(ajax_html.values())
+            text_upper = full_text.upper()
             target_upper = TARGET_NAME.upper()
+
+            # DEBUG
             start, occ = 0, 0
             while True:
                 idx = text_upper.find(target_upper, start)
                 if idx == -1:
                     break
                 occ += 1
-                fragment = page_text[max(0, idx - 200): idx + 400]
-                print(f"[DEBUG inscripciones ocurrencia {occ}]\n{repr(fragment)}\n---")
+                frag = full_text[max(0, idx-200): idx+400]
+                print(f"[DEBUG nombre ocurrencia {occ}]\n{repr(frag)}\n---")
                 start = idx + 1
             if occ == 0:
-                print(f"[DEBUG] {TARGET_NAME} no encontrado. Primeros 800 chars:\n{page_text[:800]}")
+                print(f"[DEBUG] Nombre no encontrado. Page (600):\n{page_text[:600]}")
 
-            # 4. Buscar ocurrencia con Tanda/Puesto cerca
+            # Buscar ocurrencia con Tanda/Puesto cerca
             found_text = ""
             start = 0
             while True:
                 idx = text_upper.find(target_upper, start)
                 if idx == -1:
                     break
-                fragment = page_text[max(0, idx - 200): idx + 400]
+                fragment = full_text[max(0, idx-200): idx+400]
                 if re.search(r'Tanda\s*[:\-]?\s*\d+|Puesto\s*[:\-]?\s*\d+', fragment, re.IGNORECASE):
                     found_text = fragment
                     break
@@ -219,7 +270,7 @@ async def run():
                 print(f"No se encontró {TARGET_NAME} con Tanda/Puesto asignado.")
                 return
 
-            print(f"[Inscripciones] Fragmento:\n{found_text}")
+            print(f"[Encontrado] Fragmento:\n{found_text}")
 
             # 5. Extraer Tanda y Puesto
             tanda_m  = re.search(r'Tanda\s*[:\-]?\s*(\d+)', found_text, re.IGNORECASE)
@@ -227,7 +278,6 @@ async def run():
             tanda  = tanda_m.group(1)  if tanda_m  else "?"
             puesto = puesto_m.group(1) if puesto_m else "?"
 
-            # Fallback: último número antes del nombre en la tabla
             if puesto == "?":
                 name_idx    = found_text.upper().index(target_upper)
                 nums_before = re.findall(r'\b(\d+)\b', found_text[:name_idx])
