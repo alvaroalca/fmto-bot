@@ -222,11 +222,6 @@ async def run():
             comp_url  = "https://www.wirtexsports.com" + det_url["url"]
             print(f"  Competición: {comp_date} → {comp_url}")
 
-            # 5. Comprobar si ya fue notificada
-            if comp_date == last_scores:
-                print(f"Sin cambios: {comp_date} ya notificado.")
-                return
-
             # 6. Navegar al detalle de la competición y buscar el enlace de resultados
             await page.goto(comp_url, wait_until="networkidle")
             await page.wait_for_timeout(2000)
