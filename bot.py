@@ -191,21 +191,17 @@ async def run():
             await page.goto(inscripcion_url, wait_until="networkidle")
             await page.wait_for_timeout(2000)
 
-            # Scroll para asegurar que carga todo
-            for _ in range(3):
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(600)
             page_text = await page.inner_text("body")
-            # Imprimir en trozos de 800 chars para no truncar
-            print(f"[InscripcionVer len={len(page_text)}]")
-            for i in range(0, min(len(page_text), 3200), 800):
-                print(f"  [{i}:{i+800}] {repr(page_text[i:i+800])}")
 
-            # 5. Extraer Tanda y Puesto
-            tanda_m  = re.search(r'Tanda\s*[:\-]?\s*(\d+)', page_text, re.IGNORECASE)
-            puesto_m = re.search(r'Puesto\s*[:\-]?\s*(\d+)', page_text, re.IGNORECASE)
-            tanda  = tanda_m.group(1)  if tanda_m  else "?"
-            puesto = puesto_m.group(1) if puesto_m else "?"
+            # 5. Extraer Tanda y Puesto — campos: "Nº Tanda inicial\n<valor>"
+            tanda_m  = re.search(r'Nº Tanda inicial\s*\n\s*(\d+)', page_text, re.IGNORECASE)
+            puesto_m = re.search(r'Nº Puesto inicial\s*\n\s*(\d+)', page_text, re.IGNORECASE)
+            tanda  = tanda_m.group(1)  if tanda_m  else None
+            puesto = puesto_m.group(1) if puesto_m else None
+
+            if tanda is None or puesto is None:
+                print("Tanda/Puesto aún no asignados por la organización. Se reintentará.")
+                return
 
             print(f"  Tanda={tanda}  Puesto={puesto}")
 
