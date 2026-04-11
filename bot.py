@@ -163,6 +163,18 @@ async def run():
             await page.goto(comp_det, wait_until="networkidle")
             await page.wait_for_timeout(1500)
 
+            # DEBUG: listar todos los botones/links con onclick en el detalle
+            all_btns = await page.evaluate("""
+                () => [...document.querySelectorAll('[onclick]')].map(el => ({
+                    tag: el.tagName,
+                    text: el.innerText.trim().slice(0, 60),
+                    onclick: el.getAttribute('onclick'),
+                }))
+            """)
+            print("[DEBUG botones detalle]")
+            for b in all_btns:
+                print(f"  {b['tag']} | {b['text']!r} | {b['onclick']}")
+
             clasif_url = await page.evaluate("""
                 () => {
                     const btns = [...document.querySelectorAll('[onclick]')];
