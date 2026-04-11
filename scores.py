@@ -168,83 +168,78 @@ async def run():
                 raise Exception("Login fallido en Wirtex: sigue mostrando usuario invitado.")
             print(f"Sesión iniciada. URL: {page.url}")
 
-            # 2. Cambiar a interfaz desktop (misma sesión, cookies compartidas)
-            print("Cambiando a interfaz desktop...")
-            await page.goto("https://www.wirtexsports.com/Publica/GLB/HomePub",
-                            wait_until="networkidle")
-            await page.wait_for_timeout(2000)
-            body = await page.inner_text("body")
-            if "INVITADO" in body.upper() or "GUEST" in body.upper():
-                raise Exception("Sesión no válida en interfaz desktop")
-            print(f"Desktop OK. URL: {page.url}")
+            # 2. Ya estamos en /Mobile/GLB/Competicion/CompeticionesGrid tras el login
+            #    Inspeccionamos el HTML de las filas via JS para encontrar los botones de acción
+            print("Inspeccionando filas de competición...")
+            row_infos = await page.evaluate("""
+                () => {
+                    const rows = [...document.querySelectorAll('tr')];
+                    return rows.map(row => ({
+                        text: row.innerText.trim().substring(0, 120),
+                        html: row.outerHTML.substring(0, 1500),
+                        clickables: [...row.querySelectorAll('a,button,img,[onclick]')].map(el => ({
+                            tag:     el.tagName,
+                            href:    el.getAttribute('href') || '',
+                            onclick: el.getAttribute('onclick') || '',
+                            cls:     el.className || '',
+                            src:     el.getAttribute('src') || '',
+                            text:    (el.innerText || '').trim().substring(0, 30),
+                        }))
+                    }));
+                }
+            """)
+            for ri in row_infos:
+                if "PREPARATORIA" in ri["text"].upper():
+                    print(f"\n[ROW] {ri['text']!r}")
+                    print(f"  HTML: {ri['html'][:600]}")
+                    for c in ri["clickables"]:
+                        print(f"  clickable: {c}")
 
-            # 3. Navegar a Competiciones → Mis competiciones
-            print("Navegando a Mis competiciones...")
-            for sel in ['a:has-text("Competiciones")', 'span:has-text("Competiciones")',
-                        'a:has-text("Competitions")']:
-                el = await page.query_selector(sel)
-                if el and await el.is_visible():
-                    await el.click()
-                    print(f"  Menú Competiciones con: {sel}")
-                    await page.wait_for_timeout(1000)
-                    break
+            # 3. Buscar la competición más reciente YA PASADA y hacer clic en resultados via JS
+            today     = date.today()
+            comp_date = None
 
-            for sel in ['a:has-text("Mis competiciones")', 'a:has-text("My competitions")',
-                        'a:has-text("My Competitions")']:
-                el = await page.query_selector(sel)
-                if el and await el.is_visible():
-                    await el.click()
-                    print(f"  Mis competiciones con: {sel}")
-                    break
+            clicked = await page.evaluate("""
+                (todayStr) => {
+                    const [ty, tm, td] = todayStr.split('-').map(Number);
+                    const todayTs = new Date(ty, tm-1, td).getTime();
 
-            await page.wait_for_load_state("networkidle")
-            await page.wait_for_timeout(2000)
-            print(f"URL tras nav: {page.url}")
+                    const rows = [...document.querySelectorAll('tr')];
+                    for (const row of rows) {
+                        const text = row.innerText.toUpperCase();
+                        if (!text.includes('PISTOLA AIRE') || !text.includes('PREPARATORIA')) continue;
 
-            # 4. Buscar la competición más reciente YA PASADA con botón de resultados
-            today = date.today()
-            comp_date   = None
-            results_btn = None
+                        const dm = row.innerText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+                        if (!dm) continue;
+                        const rowTs = new Date(+dm[3], +dm[2]-1, +dm[1]).getTime();
+                        if (rowTs > todayTs) continue;   // futura, saltar
 
-            rows = await page.query_selector_all("tr")
-            for row in rows:
-                text = (await row.inner_text()).upper()
-                if COMP_KEYWORD not in text or "PREPARATORIA" not in text:
-                    continue
-                date_m = re.search(r'(\d{2})/(\d{2})/(\d{4})', await row.inner_text())
-                if not date_m:
-                    continue
-                try:
-                    row_date = date(int(date_m.group(3)),
-                                   int(date_m.group(2)),
-                                   int(date_m.group(1)))
-                except ValueError:
-                    continue
-                if row_date > today:
-                    print(f"  Saltando futura: {date_m.group(0)}")
-                    continue
+                        // Buscar todos los elementos clicables de la fila
+                        const clickables = [...row.querySelectorAll('a,button,img,[onclick]')];
+                        // El botón de resultados es el segundo (el primero es inscripción)
+                        if (clickables.length >= 2) {
+                            clickables[1].click();
+                            return dm[0];   // devuelve la fecha "DD/MM/YYYY"
+                        } else if (clickables.length === 1) {
+                            return 'SOLO_UN_BOTON:' + dm[0];
+                        } else {
+                            return 'SIN_BOTONES:' + dm[0];
+                        }
+                    }
+                    return null;
+                }
+            """, str(today))
 
-                # En el desktop cada fila tiene iconos-link sin texto (los botones de acción)
-                # El segundo icono es el de resultados (el primero es inscripción)
-                btns = await row.query_selector_all("a, button")
-                print(f"  [{date_m.group(0)}] {len(btns)} botones en fila")
-                for b in btns:
-                    href = (await b.get_attribute("href")) or ""
-                    cls  = (await b.get_attribute("class")) or ""
-                    txt  = ((await b.inner_text()) or "").strip()
-                    print(f"    btn: text={txt!r} href={href!r} class={cls[:50]!r}")
+            print(f"  JS click resultado: {clicked!r}")
 
-                if len(btns) >= 2:
-                    results_btn = btns[1]   # segundo icono = resultados
-                    comp_date   = date_m.group(0)
-                    print(f"  Competición con resultados: {comp_date}")
-                    break
-                else:
-                    print(f"  Sin resultados aún: {date_m.group(0)}")
-
-            if not results_btn:
+            if not clicked:
                 print("No se encontró competición pasada con resultados.")
                 return
+            if clicked.startswith("SOLO_UN_BOTON:") or clicked.startswith("SIN_BOTONES:"):
+                print(f"Competición encontrada pero sin botón de resultados: {clicked}")
+                return
+
+            comp_date = clicked
 
             # 5. Comprobar si ya fue notificada
             if comp_date == LAST_SCORES:
