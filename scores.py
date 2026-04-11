@@ -199,56 +199,83 @@ async def run():
             today     = date.today()
             comp_date = None
 
-            clicked = await page.evaluate("""
+            # Extraer la URL de detalle del onclick del <tr> para la competición más reciente pasada
+            det_url = await page.evaluate("""
                 (todayStr) => {
                     const [ty, tm, td] = todayStr.split('-').map(Number);
                     const todayTs = new Date(ty, tm-1, td).getTime();
-
-                    const rows = [...document.querySelectorAll('tr')];
+                    const rows = [...document.querySelectorAll('tr[onclick]')];
                     for (const row of rows) {
                         const text = row.innerText.toUpperCase();
                         if (!text.includes('PISTOLA AIRE') || !text.includes('PREPARATORIA')) continue;
-
-                        const dm = row.innerText.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+                        const dm = row.innerText.match(/(\\d{2})\\/(\\d{2})\\/(\\d{4})/);
                         if (!dm) continue;
                         const rowTs = new Date(+dm[3], +dm[2]-1, +dm[1]).getTime();
-                        if (rowTs > todayTs) continue;   // futura, saltar
-
-                        // Buscar todos los elementos clicables de la fila
-                        const clickables = [...row.querySelectorAll('a,button,img,[onclick]')];
-                        // El botón de resultados es el segundo (el primero es inscripción)
-                        if (clickables.length >= 2) {
-                            clickables[1].click();
-                            return dm[0];   // devuelve la fecha "DD/MM/YYYY"
-                        } else if (clickables.length === 1) {
-                            return 'SOLO_UN_BOTON:' + dm[0];
-                        } else {
-                            return 'SIN_BOTONES:' + dm[0];
-                        }
+                        if (rowTs > todayTs) continue;
+                        // Extraer URL del onclick: onclick="document.location.href = '/Mobile/...'"
+                        const oc = row.getAttribute('onclick') || '';
+                        const m = oc.match(/href\\s*=\\s*'([^']+)'/);
+                        return m ? {url: m[1], date: dm[0]} : null;
                     }
                     return null;
                 }
             """, str(today))
 
-            print(f"  JS click resultado: {clicked!r}")
-
-            if not clicked:
+            if not det_url:
                 print("No se encontró competición pasada con resultados.")
                 return
-            if clicked.startswith("SOLO_UN_BOTON:") or clicked.startswith("SIN_BOTONES:"):
-                print(f"Competición encontrada pero sin botón de resultados: {clicked}")
-                return
 
-            comp_date = clicked
+            comp_date = det_url["date"]
+            comp_url  = "https://www.wirtexsports.com" + det_url["url"]
+            print(f"  Competición: {comp_date} → {comp_url}")
 
             # 5. Comprobar si ya fue notificada
             if comp_date == LAST_SCORES:
                 print(f"Sin cambios: {comp_date} ya notificado.")
                 return
 
-            # 6. Abrir página de resultados
-            await results_btn.click()
-            await page.wait_for_load_state("networkidle")
+            # 6. Navegar al detalle de la competición y buscar el enlace de resultados
+            await page.goto(comp_url, wait_until="networkidle")
+            await page.wait_for_timeout(2000)
+            print(f"Detalle competición cargado. URL: {page.url}")
+
+            det_text = await page.inner_text("body")
+            print(f"[Debug detalle] Primeros 1000:\n{det_text[:1000]}")
+
+            # Listar todos los links del detalle para encontrar el de resultados/puntuaciones
+            det_links = await page.evaluate("""
+                () => [...document.querySelectorAll('a[href], [onclick]')].map(el => ({
+                    tag:     el.tagName,
+                    href:    el.getAttribute('href') || '',
+                    onclick: el.getAttribute('onclick') || '',
+                    text:    (el.innerText || '').trim().substring(0, 60),
+                }))
+            """)
+            for lnk in det_links:
+                print(f"  [det link] {lnk}")
+
+            # Navegar al enlace de puntuaciones/resultados
+            scores_url = None
+            for lnk in det_links:
+                href = lnk["href"].lower()
+                oc   = lnk["onclick"].lower()
+                if any(k in href or k in oc for k in
+                       ["puntuacion", "resultado", "score", "clasif"]):
+                    raw = lnk["href"] or re.search(r"href\s*=\s*'([^']+)'", lnk["onclick"], re.I)
+                    if isinstance(raw, str) and raw:
+                        scores_url = ("https://www.wirtexsports.com" + raw
+                                      if raw.startswith("/") else raw)
+                        break
+                    if hasattr(raw, "group"):
+                        scores_url = "https://www.wirtexsports.com" + raw.group(1)
+                        break
+
+            if not scores_url:
+                print("No se encontró enlace de puntuaciones en el detalle.")
+                return
+
+            print(f"  URL puntuaciones: {scores_url}")
+            await page.goto(scores_url, wait_until="networkidle")
             await page.wait_for_timeout(2000)
             print(f"Página resultados cargada.")
 
