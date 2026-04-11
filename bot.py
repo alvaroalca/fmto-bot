@@ -254,7 +254,7 @@ async def run():
 
         except Exception as e:
             print(f"ERROR: {e}")
-            send_telegram(f"❌ *Error en el bot FMTO*\n`{e}`")
+            print(f"ERROR (sin notificar): {e}")
 
         finally:
             await browser.close()

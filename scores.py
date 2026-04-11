@@ -316,7 +316,7 @@ async def run():
 
         except Exception as e:
             print(f"ERROR: {e}")
-            send_telegram(f"❌ *Error en bot Wirtex*\n`{e}`")
+            print(f"ERROR (sin notificar): {e}")
         finally:
             await browser.close()
 
