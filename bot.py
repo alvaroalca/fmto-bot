@@ -191,10 +191,21 @@ async def run():
             found_text = ""
             for _ in range(15):   # máximo 15 páginas
                 page_text = await page.inner_text("body")
-                if TARGET_NAME.upper() in page_text.upper():
-                    # Extraer el fragmento alrededor del nombre
-                    idx = page_text.upper().index(TARGET_NAME.upper())
-                    found_text = page_text[max(0, idx - 20): idx + 200]
+                text_upper = page_text.upper()
+                target_upper = TARGET_NAME.upper()
+                # Buscar TODAS las ocurrencias del nombre; quedarse con la que
+                # tenga "Tanda N" cerca (la fila de la tabla, no el menú/bienvenida)
+                start = 0
+                while True:
+                    idx = text_upper.find(target_upper, start)
+                    if idx == -1:
+                        break
+                    fragment = page_text[max(0, idx - 150): idx + 300]
+                    if re.search(r'Tanda\s+\d+', fragment, re.IGNORECASE):
+                        found_text = fragment
+                        break
+                    start = idx + 1
+                if found_text:
                     break
                 # Siguiente página
                 next_btn = await page.query_selector(
@@ -206,21 +217,21 @@ async def run():
                 await page.wait_for_timeout(1000)
 
             if not found_text:
-                print(f"No se encontró {TARGET_NAME} en la clasificación.")
+                print(f"No se encontró {TARGET_NAME} con Tanda asignada.")
                 return
 
             print(f"[Clasificación] Fragmento:\n{found_text}")
 
             # 5. Extraer Tanda y Puesto del fragmento
-            tanda_m  = re.search(r'Tanda\s*(\d+)', found_text, re.IGNORECASE)
-            puesto_m = re.search(r'Puesto.*?(\d+)|(\d+)\s*$', found_text)
+            tanda_m = re.search(r'Tanda\s+(\d+)', found_text, re.IGNORECASE)
+            tanda   = tanda_m.group(1) if tanda_m else "?"
 
-            # En la tabla mobile el texto es: "Prueba - Tanda N ... puesto"
-            # Buscamos el número de puesto que aparece después de la fecha
-            nums = re.findall(r'\b(\d+)\b', found_text)
-            tanda  = tanda_m.group(1) if tanda_m else "?"
-            # El puesto suele ser el último número del fragmento (o el que sigue a la fecha)
-            puesto = nums[-1] if nums else "?"
+            # El puesto es el número que aparece ANTES del nombre en la fila
+            # Tomamos el fragmento anterior al nombre y cogemos el último número
+            name_idx  = found_text.upper().index(TARGET_NAME.upper())
+            before    = found_text[:name_idx]
+            nums_before = re.findall(r'\b(\d+)\b', before)
+            puesto = nums_before[-1] if nums_before else "?"
 
             print(f"  Tanda={tanda}  Puesto={puesto}")
 
