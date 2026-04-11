@@ -129,132 +129,124 @@ async def run():
                 raise Exception("Login fallido en Wirtex.")
             print(f"Sesión iniciada. URL: {page.url}")
 
-            # 2. Buscar la próxima competición PREPARATORIA futura
+            # 2. Cambiar a la interfaz clásica (donde sí aparece Tanda/Puesto antes de tirar)
+            print("Cambiando a interfaz clásica...")
+            await page.goto("https://www.wirtexsports.com/Publica/GLB/HomePub", wait_until="networkidle")
+            await page.wait_for_timeout(2000)
+            print(f"  URL clásica: {page.url}")
+
+            # 3. Buscar la próxima competición PREPARATORIA futura en la interfaz clásica
             today = date.today()
-            comp_url = await page.evaluate("""
+            comp_info = await page.evaluate("""
                 (todayStr) => {
                     const [ty, tm, td] = todayStr.split('-').map(Number);
                     const todayTs = new Date(ty, tm-1, td).getTime();
-                    const rows = [...document.querySelectorAll('tr[onclick]')];
+                    // Filas de la tabla de competiciones (pueden ser <tr> o <div>)
+                    const rows = [...document.querySelectorAll('tr, [class*="row"], [class*="Row"]')];
                     for (const row of rows) {
                         const text = row.innerText.toUpperCase();
                         if (!text.includes('PISTOLA AIRE') || !text.includes('PREPARATORIA')) continue;
+                        // Buscar fecha en formato dd/mm/yyyy o yyyy-mm-dd
                         const dm = row.innerText.match(/(\\d{2})\\/(\\d{2})\\/(\\d{4})/);
                         if (!dm) continue;
                         const rowTs = new Date(+dm[3], +dm[2]-1, +dm[1]).getTime();
-                        if (rowTs < todayTs) continue;   // pasada, saltar
-                        const oc = row.getAttribute('onclick') || '';
-                        const m = oc.match(/href\\s*=\\s*'([^']+)'/);
-                        return m ? {url: m[1], date: dm[0]} : null;
+                        if (rowTs < todayTs) continue;
+                        // Buscar enlace de detalle: href o onclick
+                        const links = [...row.querySelectorAll('a[href], [onclick]')];
+                        for (const lnk of links) {
+                            const href = lnk.getAttribute('href') || '';
+                            const oc   = lnk.getAttribute('onclick') || '';
+                            const combined = href + oc;
+                            if (combined.toLowerCase().includes('competicion_det') ||
+                                combined.toLowerCase().includes('detalle') ||
+                                combined.toLowerCase().includes('inscripcion')) {
+                                // extraer URL
+                                const mUrl = combined.match(/\\/[^'"\\s]+/);
+                                if (mUrl) return {url: mUrl[0], date: dm[0]};
+                            }
+                        }
+                        // fallback: primer href de la fila
+                        const firstA = row.querySelector('a[href]');
+                        if (firstA) return {url: firstA.getAttribute('href'), date: dm[0]};
                     }
                     return null;
                 }
             """, str(today))
 
-            if not comp_url:
-                print("No hay próxima PREPARATORIA futura en la lista. Nada que hacer.")
+            # DEBUG: si no encontramos nada, imprimir el texto completo para ver la estructura
+            if not comp_info:
+                body_text = await page.inner_text("body")
+                print(f"[DEBUG clásica] No se encontró competición. Texto página (500 chars):\n{body_text[:500]}")
+                # Imprimir todas las filas con onclick
+                all_rows = await page.evaluate("""
+                    () => [...document.querySelectorAll('tr[onclick], a[onclick]')].slice(0,20).map(el => ({
+                        text: el.innerText.trim().slice(0,80),
+                        onclick: el.getAttribute('onclick'),
+                        href: el.getAttribute('href') || '',
+                    }))
+                """)
+                print("[DEBUG filas clásica]")
+                for r in all_rows:
+                    print(f"  {r['text']!r} | {r['onclick']} | {r['href']}")
+                print("No hay próxima PREPARATORIA en la interfaz clásica. Nada que hacer.")
                 return
 
-            comp_date = comp_url["date"]
-            comp_det  = "https://www.wirtexsports.com" + comp_url["url"]
+            comp_date = comp_info["date"]
+            comp_det  = ("https://www.wirtexsports.com" + comp_info["url"]
+                         if comp_info["url"].startswith("/") else comp_info["url"])
             print(f"  Próxima competición: {comp_date} → {comp_det}")
 
-            # 3. Navegar al detalle y obtener la URL de CLASIFICACIÓN
+            # 4. Navegar al detalle y buscar Tanda/Puesto de TARGET_NAME
             await page.goto(comp_det, wait_until="networkidle")
-            await page.wait_for_timeout(1500)
-
-            # DEBUG: listar todos los botones/links con onclick en el detalle
-            all_btns = await page.evaluate("""
-                () => [...document.querySelectorAll('[onclick]')].map(el => ({
-                    tag: el.tagName,
-                    text: el.innerText.trim().slice(0, 60),
-                    onclick: el.getAttribute('onclick'),
-                }))
-            """)
-            print("[DEBUG botones detalle]")
-            for b in all_btns:
-                print(f"  {b['tag']} | {b['text']!r} | {b['onclick']}")
-
-            clasif_url = await page.evaluate("""
-                () => {
-                    const btns = [...document.querySelectorAll('[onclick]')];
-                    for (const btn of btns) {
-                        const oc = btn.getAttribute('onclick') || '';
-                        if (oc.toLowerCase().includes('clasificacion')) {
-                            const m = oc.match(/href\\s*[=]\\s*'([^']+)'/);
-                            return m ? m[1] : null;
-                        }
-                    }
-                    return null;
-                }
-            """)
-
-            if not clasif_url:
-                print("No se encontró el botón CLASIFICACIÓN en el detalle. ¿Aún sin asignación?")
-                return
-
-            full_clasif = "https://www.wirtexsports.com" + clasif_url
-            print(f"  URL clasificación: {full_clasif}")
-
-            # 4. Navegar a la clasificación y buscar a TARGET_NAME paginando
-            await page.goto(full_clasif, wait_until="networkidle")
             await page.wait_for_timeout(2000)
 
+            page_text = await page.inner_text("body")
+
+            # DEBUG: mostrar fragmentos alrededor del nombre
+            text_upper   = page_text.upper()
+            target_upper = TARGET_NAME.upper()
+            start, occ = 0, 0
+            while True:
+                idx = text_upper.find(target_upper, start)
+                if idx == -1:
+                    break
+                occ += 1
+                fragment = page_text[max(0, idx - 200): idx + 400]
+                print(f"[DEBUG detalle ocurrencia {occ}]\n{repr(fragment)}\n---")
+                start = idx + 1
+            if occ == 0:
+                print(f"[DEBUG] {TARGET_NAME} no aparece en el detalle. Texto (500):\n{page_text[:500]}")
+
+            # Buscar ocurrencia con Tanda/Puesto cerca
             found_text = ""
-            for _ in range(15):   # máximo 15 páginas
-                page_text = await page.inner_text("body")
-                text_upper = page_text.upper()
-                target_upper = TARGET_NAME.upper()
-                # DEBUG: imprimir todas las ocurrencias con contexto amplio
-                start = 0
-                occ = 0
-                while True:
-                    idx = text_upper.find(target_upper, start)
-                    if idx == -1:
-                        break
-                    occ += 1
-                    fragment = page_text[max(0, idx - 200): idx + 400]
-                    print(f"[DEBUG ocurrencia {occ}]\n{repr(fragment)}\n---")
-                    start = idx + 1
-                # Buscar TODAS las ocurrencias del nombre; quedarse con la que
-                # tenga "Tanda N" cerca (la fila de la tabla, no el menú/bienvenida)
-                start = 0
-                while True:
-                    idx = text_upper.find(target_upper, start)
-                    if idx == -1:
-                        break
-                    fragment = page_text[max(0, idx - 150): idx + 300]
-                    if re.search(r'Tanda\s+\d+', fragment, re.IGNORECASE):
-                        found_text = fragment
-                        break
-                    start = idx + 1
-                if found_text:
+            start = 0
+            while True:
+                idx = text_upper.find(target_upper, start)
+                if idx == -1:
                     break
-                # Siguiente página
-                next_btn = await page.query_selector(
-                    'a:has-text("›"), a:has-text(">"), a[title*="iguiente"]')
-                if not next_btn or not await next_btn.is_visible():
+                fragment = page_text[max(0, idx - 200): idx + 400]
+                if re.search(r'Tanda\s*[:\-]?\s*\d+|Puesto\s*[:\-]?\s*\d+|\bT\s*\d+\b', fragment, re.IGNORECASE):
+                    found_text = fragment
                     break
-                await next_btn.click()
-                await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(1000)
+                start = idx + 1
 
             if not found_text:
-                print(f"No se encontró {TARGET_NAME} con Tanda asignada.")
+                print(f"No se encontró {TARGET_NAME} con Tanda/Puesto asignado en el detalle.")
                 return
 
-            print(f"[Clasificación] Fragmento:\n{found_text}")
+            print(f"[Detalle] Fragmento:\n{found_text}")
 
-            # 5. Extraer Tanda y Puesto del fragmento
-            tanda_m = re.search(r'Tanda\s+(\d+)', found_text, re.IGNORECASE)
-            tanda   = tanda_m.group(1) if tanda_m else "?"
+            # 5. Extraer Tanda y Puesto
+            tanda_m  = re.search(r'Tanda\s*[:\-]?\s*(\d+)', found_text, re.IGNORECASE)
+            puesto_m = re.search(r'Puesto\s*[:\-]?\s*(\d+)', found_text, re.IGNORECASE)
+            tanda  = tanda_m.group(1)  if tanda_m  else "?"
+            puesto = puesto_m.group(1) if puesto_m else "?"
 
-            # El puesto es el número que aparece ANTES del nombre en la fila
-            # Tomamos el fragmento anterior al nombre y cogemos el último número
-            name_idx  = found_text.upper().index(TARGET_NAME.upper())
-            before    = found_text[:name_idx]
-            nums_before = re.findall(r'\b(\d+)\b', before)
-            puesto = nums_before[-1] if nums_before else "?"
+            # Fallback: números que preceden al nombre (columna de puesto en tabla)
+            if puesto == "?":
+                name_idx    = found_text.upper().index(target_upper)
+                nums_before = re.findall(r'\b(\d+)\b', found_text[:name_idx])
+                puesto = nums_before[-1] if nums_before else "?"
 
             print(f"  Tanda={tanda}  Puesto={puesto}")
 
