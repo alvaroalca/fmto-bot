@@ -221,47 +221,74 @@ async def run():
             puntuaciones_url = "https://www.wirtexsports.com" + puntuaciones_path
             print(f"  URL puntuaciones: {puntuaciones_url}")
 
-            # 6. Navegar a la página de puntuaciones y buscar TARGET_NAME
+            # 6. Navegar a PuntuacionesIndex e interceptar la respuesta JSON del jqGrid
+            import json as _json
+            grid_data = []
+
+            async def capture_grid(response):
+                url = response.url
+                if "PuntuacionesGrid" in url or "PuntuacionesObtener" in url:
+                    try:
+                        body = await response.text()
+                        grid_data.append({"url": url, "body": body})
+                        print(f"  [AJAX grid] {url} → {len(body)} chars")
+                    except Exception:
+                        pass
+
+            page.on("response", capture_grid)
+
             await page.goto(puntuaciones_url, wait_until="networkidle")
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(4000)   # dar tiempo al jqGrid
 
-            # La tabla se carga vía AJAX (jqGrid); esperar y leer
-            page_text = await page.inner_text("body")
+            print(f"  Grid responses capturadas: {len(grid_data)}")
 
-            # Buscar "ALVARO ALCARAZ" en la tabla paginada (máx. 20 páginas)
-            found_row = ""
-            for _ in range(20):
-                text_upper = page_text.upper()
-                idx = text_upper.find(TARGET_NAME.upper())
-                if idx != -1:
-                    found_row = page_text[max(0, idx - 100): idx + 300]
-                    break
-                # Siguiente página del jqGrid
-                next_btn = await page.query_selector(
-                    'td[id$="_next"], a[id$="_next"], [title="Next Page"], '
-                    'input[value=">"], button:has-text(">")')
-                if not next_btn or not await next_btn.is_visible():
-                    break
-                await next_btn.click()
-                await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(1500)
-                page_text = await page.inner_text("body")
+            # Buscar en los JSON del grid
+            tanda, puesto = "?", "?"
+            target_upper = TARGET_NAME.upper()
 
-            if not found_row:
-                print(f"No se encontró {TARGET_NAME} en la tabla de puntuaciones.")
+            for resp in grid_data:
+                body = resp["body"]
+                # El JSON del jqGrid tiene "rows": [{...}, ...]
+                try:
+                    data = _json.loads(body)
+                    rows = data.get("rows", [])
+                    for row in rows:
+                        cell_vals = row.get("cell", [])
+                        row_str = " ".join(str(c) for c in cell_vals).upper()
+                        if target_upper in row_str:
+                            print(f"[Grid row] {cell_vals}")
+                            # Buscar Tanda y Puesto en los valores de la fila
+                            full = " ".join(str(c) for c in cell_vals)
+                            tm = re.search(r'Tanda\s+(\d+)', full, re.IGNORECASE)
+                            pm = re.search(r'\bPuesto\s+(\d+)|\bPuesto\b[^\d]*(\d+)', full, re.IGNORECASE)
+                            tanda  = tm.group(1) if tm else "?"
+                            # El puesto suele ser una celda numérica
+                            if pm:
+                                puesto = pm.group(1) or pm.group(2)
+                            else:
+                                nums = [str(c) for c in cell_vals if str(c).isdigit() and 1 <= int(c) <= 200]
+                                puesto = nums[0] if nums else "?"
+                            break
+                    if tanda != "?" or puesto != "?":
+                        break
+                except Exception:
+                    # Si no es JSON, buscar en texto plano
+                    if target_upper in body.upper():
+                        tm = re.search(r'Tanda\s+(\d+)', body, re.IGNORECASE)
+                        pm = re.search(r'"puesto"\s*:\s*"?(\d+)', body, re.IGNORECASE)
+                        tanda  = tm.group(1) if tm else "?"
+                        puesto = pm.group(1) if pm else "?"
+                        print(f"[Grid texto] Tanda={tanda} Puesto={puesto}")
+                        break
+
+            if tanda == "?" and puesto == "?":
+                # Debug: imprimir primeros 400 chars de cada respuesta capturada
+                for resp in grid_data:
+                    print(f"[DEBUG grid body] {resp['url']}\n  {resp['body'][:400]}")
+                if not grid_data:
+                    print("No se capturó ninguna respuesta del grid. "
+                          "Tanda/Puesto aún no asignados o grid no cargó.")
                 return
-
-            print(f"[Puntuaciones] Fragmento:\n{found_row}")
-
-            # 7. Extraer Tanda y Puesto del fragmento
-            #    Formato: "Prueba - Tanda 1 ... Puesto 6"
-            tanda_m  = re.search(r'Tanda\s+(\d+)', found_row, re.IGNORECASE)
-            puesto_m = re.search(r'Puesto\s+(\d+)', found_row, re.IGNORECASE)
-
-            # Fallback: la columna Puesto es un número aislado en la fila
-            nums = re.findall(r'\b(\d+)\b', found_row)
-            tanda  = tanda_m.group(1)  if tanda_m  else "?"
-            puesto = puesto_m.group(1) if puesto_m else (nums[-1] if nums else "?")
 
             print(f"  Tanda={tanda}  Puesto={puesto}")
 
