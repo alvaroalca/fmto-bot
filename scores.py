@@ -85,16 +85,13 @@ def parse_series(text):
 # ---------------------------------------------------------------------------
 # Construcción del mensaje
 # ---------------------------------------------------------------------------
-def build_message(fecha, clasificaciones, clasif_general, total, xs, series):
+def build_message(fecha, total, xs, series):
     lines = [
         f"🎯 *Puntuaciones - Preparatoria Pistola Aire 10m*",
         f"📅 {fecha}",
         "",
+        f"💯 Total: *{total}* | ✖️ X's: *{xs}*",
     ]
-    if clasificaciones:
-        lines.append(clasificaciones)
-        lines.append("")
-    lines.append(f"🏅 Clasif: *{clasif_general}º* | 💯 Total: *{total}* | ✖️ X's: *{xs}*")
     if series:
         lines.append("")
         for i, s in enumerate(series, 1):
@@ -288,7 +285,7 @@ async def run():
                 print(f"Sin cambios: {score_key} ya notificado.")
                 return
 
-            msg = build_message(fecha_comp, clasif_str, clasif_general, total, xs, series)
+            msg = build_message(fecha_comp, total, xs, series)
             send_telegram(msg)
             save_last_scores(score_key)
             print(f"Puntuaciones enviadas. Clave: {score_key}")
