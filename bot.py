@@ -131,7 +131,7 @@ async def run():
 
             # 2. Cambiar a la interfaz clásica (donde sí aparece Tanda/Puesto antes de tirar)
             print("Cambiando a interfaz clásica...")
-            await page.goto("https://www.wirtexsports.com/Publica/GLB/HomePub", wait_until="networkidle")
+            await page.goto("https://www.wirtexsports.com/Publica/GLB/HomePub?MOBILE=NO", wait_until="networkidle")
             await page.wait_for_timeout(2000)
             print(f"  URL clásica: {page.url}")
 
