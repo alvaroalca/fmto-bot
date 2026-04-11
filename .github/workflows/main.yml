@@ -21,12 +21,12 @@ jobs:
           python-version: '3.11'
       - name: Instalar dependencias
         run: |
-          pip install playwright requests pypdf
+          pip install playwright requests
           playwright install chromium --with-deps
       - name: Ejecutar bot
         env:
-          FMTO_USER: ${{ secrets.FMTO_USER }}
-          FMTO_PASS: ${{ secrets.FMTO_PASS }}
+          WIRTEX_USER: ${{ secrets.WIRTEX_USER }}
+          WIRTEX_PASS: ${{ secrets.WIRTEX_PASS }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

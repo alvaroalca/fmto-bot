@@ -1,22 +1,21 @@
 import os
 import asyncio
-import io
 import re
 import requests
+from datetime import date
 from playwright.async_api import async_playwright
-from pypdf import PdfReader
 
-FMTO_USER        = os.getenv("FMTO_USER")
-FMTO_PASS        = os.getenv("FMTO_PASS")
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+WIRTEX_USER       = os.getenv("WIRTEX_USER")
+WIRTEX_PASS       = os.getenv("WIRTEX_PASS")
+TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
 GITHUB_TOKEN      = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")
 
-MEMORY_FILE = ".github/last_competition.txt"
-
-BASE_URL    = "https://www.fmto.net"
-TARGET_NFED = "65226"
+WIRTEX_URL   = "https://www.wirtexsports.com"
+COMP_KEYWORD = "PISTOLA AIRE 10 METROS"
+TARGET_NAME  = "ALVARO ALCARAZ"
+MEMORY_FILE  = ".github/last_competition.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -28,16 +27,9 @@ def send_telegram(text):
         "chat_id": TELEGRAM_CHAT_ID,
         "text": text,
         "parse_mode": "Markdown",
-        "disable_web_page_preview": False,
+        "disable_web_page_preview": True,
     })
-    print(f"[Telegram] status={r.status_code} respuesta={r.text[:300]}")
-
-
-def send_telegram_photo(path, caption=""):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
-    with open(path, "rb") as f:
-        r = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption}, files={"photo": f})
-    print(f"[Telegram foto] status={r.status_code} respuesta={r.text[:200]}")
+    print(f"[Telegram] status={r.status_code}")
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +52,7 @@ def load_last_competition():
         return base64.b64decode(r.json()["content"]).decode().strip()
     return ""
 
-def save_last_competition(url):
+def save_last_competition(key):
     if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
         print("[Memoria] Sin token/repo.")
         return
@@ -69,61 +61,13 @@ def save_last_competition(url):
     r = requests.get(api, headers=_gh_headers())
     sha = r.json().get("sha") if r.status_code == 200 else None
     data = {
-        "message": f"chore: last_competition={url}",
-        "content": base64.b64encode(url.encode()).decode(),
+        "message": f"chore: last_competition={key}",
+        "content": base64.b64encode(key.encode()).decode(),
     }
     if sha:
         data["sha"] = sha
     r = requests.put(api, json=data, headers=_gh_headers())
-    print(f"[Memoria] last_competition={url!r} → {'OK' if r.status_code in (200,201) else f'ERROR {r.status_code}'}")
-
-
-# ---------------------------------------------------------------------------
-# PDF parsing
-# ---------------------------------------------------------------------------
-def parse_pdf(pdf_bytes):
-    """Devuelve (puesto, tanda, linea_raw) para el tirador con TARGET_NFED.
-
-    El PDF tiene el formato (sin espacios entre columnas):
-      MODALIDAD + NFed + Nivel(1 dígito) + Categoría(texto) + Puesto + Tanda
-    Ejemplo: 'PISTOLA AIRE 10 M652263SENIOR61'
-      → NFed=65226, Nivel=3, Cat=SENIOR, Puesto=6, Tanda=1
-
-    Estrategia: tomar el sufijo tras el NFed, coger el último bloque de dígitos
-    (puesto+tanda concatenados) y separar: último dígito = tanda, el resto = puesto.
-    """
-    reader = PdfReader(io.BytesIO(pdf_bytes))
-
-    for page in reader.pages:
-        text = page.extract_text() or ""
-        if TARGET_NFED not in text:
-            continue
-
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-        print(f"[PDF] Página con {TARGET_NFED} encontrada ({len(lines)} líneas)")
-
-        for line in lines:
-            if TARGET_NFED not in line:
-                continue
-
-            print(f"[PDF] Línea: {line!r}")
-
-            # Texto tras el N Fed: p.ej. '3SENIOR61'
-            suffix = line[line.index(TARGET_NFED) + len(TARGET_NFED):]
-
-            # Último bloque de dígitos al final del sufijo: p.ej. '61'
-            m = re.search(r"(\d+)$", suffix)
-            if not m or len(m.group(1)) < 2:
-                continue
-
-            combined = m.group(1)       # '61'
-            tanda    = combined[-1]     # '1'
-            puesto   = combined[:-1]    # '6'
-
-            print(f"[PDF] Sufijo={suffix!r} → combined={combined!r} → Puesto={puesto}, Tanda={tanda}")
-            return puesto, tanda, line
-
-    return None
+    print(f"[Memoria] last_competition={key!r} → {'OK' if r.status_code in (200,201) else f'ERROR {r.status_code}'}")
 
 
 # ---------------------------------------------------------------------------
@@ -139,143 +83,167 @@ async def run():
         page = await context.new_page()
 
         try:
-            # 1. Login  (selectores confirmados en el código original)
-            print("Logueando en FMTO...")
-            await page.goto(f"{BASE_URL}/acceso-federados", wait_until="networkidle")
-            await page.fill('input[name="username"]', FMTO_USER)
-            await page.fill('input[name="password"]', FMTO_PASS)
+            # 1. Login en Wirtex
+            print("Logueando en Wirtex...")
+            await page.goto(WIRTEX_URL, wait_until="networkidle")
 
-            # Esperar la navegación que ocurre tras el submit
-            async with page.expect_navigation(wait_until="networkidle", timeout=15000):
-                await page.click('button[type="submit"]')
+            spain = await page.query_selector('a:has-text("Spain")')
+            if spain and await spain.is_visible():
+                await spain.click()
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(2000)
 
-            print(f"Sesión iniciada. URL actual: {page.url}")
+            print(f"  URL login: {page.url}")
 
-            # 2. Ir a la lista de competiciones
-            print("Navegando a la lista de preparatorias...")
-            await page.goto(f"{BASE_URL}/competiciones/provpues", wait_until="networkidle")
+            await page.evaluate(
+                """([user, pwd]) => {
+                    const inputs = [...document.querySelectorAll('input:not([type="hidden"])')];
+                    const userInput = inputs.find(i =>
+                        i.type === 'email' ||
+                        (i.name || '').toLowerCase().includes('user') ||
+                        (i.name || '').toLowerCase().includes('mail')
+                    ) || inputs[0];
+                    const passInput = inputs.find(i => i.type === 'password');
+                    function setVal(el, val) {
+                        const nativeSet = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype, 'value').set;
+                        nativeSet.call(el, val);
+                        el.dispatchEvent(new Event('input', {bubbles: true}));
+                        el.dispatchEvent(new Event('change', {bubbles: true}));
+                    }
+                    if (userInput) setVal(userInput, user);
+                    if (passInput)  setVal(passInput, pwd);
+                }""",
+                [WIRTEX_USER, WIRTEX_PASS]
+            )
+            await page.evaluate("""
+                const btn = document.querySelector('button[type="submit"], input[type="submit"]');
+                if (btn) btn.click();
+                else { const f = document.querySelector('form'); if (f) f.submit(); }
+            """)
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(2000)
 
-            # 3. Encontrar el enlace de la PREPARATORIA PISTOLA AIRE 10M más reciente
-            # (se asume que la lista está ordenada por fecha descendente)
-            competition_url = None
-            for link in await page.query_selector_all("a"):
-                text = ((await link.inner_text()) or "").upper().strip()
-                href = (await link.get_attribute("href")) or ""
-                if "PREPARATORIA" in text and "PISTOLA" in text and \
-                   ("AIRE" in text or "10M" in text or "pistola-aire" in href):
-                    competition_url = href if href.startswith("http") else f"{BASE_URL}{href}"
-                    print(f"Competición encontrada: {text!r} → {competition_url}")
-                    break
+            body = await page.inner_text("body")
+            if "INVITADO" in body.upper() or "GUEST" in body.upper():
+                raise Exception("Login fallido en Wirtex.")
+            print(f"Sesión iniciada. URL: {page.url}")
 
-            if not competition_url:
-                raise Exception("No se encontró ninguna PREPARATORIA PISTOLA AIRE 10M en la lista.")
+            # 2. Buscar la próxima competición PREPARATORIA futura
+            today = date.today()
+            comp_url = await page.evaluate("""
+                (todayStr) => {
+                    const [ty, tm, td] = todayStr.split('-').map(Number);
+                    const todayTs = new Date(ty, tm-1, td).getTime();
+                    const rows = [...document.querySelectorAll('tr[onclick]')];
+                    for (const row of rows) {
+                        const text = row.innerText.toUpperCase();
+                        if (!text.includes('PISTOLA AIRE') || !text.includes('PREPARATORIA')) continue;
+                        const dm = row.innerText.match(/(\\d{2})\\/(\\d{2})\\/(\\d{4})/);
+                        if (!dm) continue;
+                        const rowTs = new Date(+dm[3], +dm[2]-1, +dm[1]).getTime();
+                        if (rowTs < todayTs) continue;   // pasada, saltar
+                        const oc = row.getAttribute('onclick') || '';
+                        const m = oc.match(/href\\s*=\\s*'([^']+)'/);
+                        return m ? {url: m[1], date: dm[0]} : null;
+                    }
+                    return null;
+                }
+            """, str(today))
 
-            # ¿Es una tirada nueva?
-            if competition_url == last_competition:
-                print(f"Sin cambios: esta tirada ya fue notificada ({competition_url}). Nada que hacer.")
+            if not comp_url:
+                print("No hay próxima PREPARATORIA futura en la lista. Nada que hacer.")
                 return
 
-            print(f"¡Nueva tirada detectada! Procesando...")
+            comp_date = comp_url["date"]
+            comp_det  = "https://www.wirtexsports.com" + comp_url["url"]
+            print(f"  Próxima competición: {comp_date} → {comp_det}")
 
-            # 4. Entrar a la página de la competición
-            await page.goto(competition_url, wait_until="networkidle")
+            # 3. Navegar al detalle y obtener la URL de CLASIFICACIÓN
+            await page.goto(comp_det, wait_until="networkidle")
+            await page.wait_for_timeout(1500)
 
+            clasif_url = await page.evaluate("""
+                () => {
+                    const btns = [...document.querySelectorAll('[onclick]')];
+                    for (const btn of btns) {
+                        const oc = btn.getAttribute('onclick') || '';
+                        if (oc.toLowerCase().includes('clasificacion')) {
+                            const m = oc.match(/href\\s*[=]\\s*'([^']+)'/);
+                            return m ? m[1] : null;
+                        }
+                    }
+                    return null;
+                }
+            """)
 
-            # 5. Descargar el PDF interceptando la descarga del navegador
-            # Solo se consideran links del propio dominio fmto.net (no externos como phoca.cz)
-            pdf_bytes = None
+            if not clasif_url:
+                print("No se encontró el botón CLASIFICACIÓN en el detalle. ¿Aún sin asignación?")
+                return
 
-            def is_fmto_href(href):
-                if not href:
-                    return False
-                if href.startswith("http"):
-                    return "fmto.net" in href
-                return True  # relativo → es del mismo dominio
+            full_clasif = "https://www.wirtexsports.com" + clasif_url
+            print(f"  URL clasificación: {full_clasif}")
 
-            # Método A: enlace directo .pdf en fmto.net
-            for lnk in await page.query_selector_all("a[href$='.pdf'], a[href*='.pdf?']"):
-                href = (await lnk.get_attribute("href")) or ""
-                if is_fmto_href(href):
-                    full = href if href.startswith("http") else f"{BASE_URL}{href}"
-                    print(f"[PDF] Método A: {full}")
-                    cookies = await context.cookies()
-                    s = requests.Session()
-                    for c in cookies:
-                        s.cookies.set(c["name"], c["value"], domain=c.get("domain", ""))
-                    r = s.get(full, timeout=30)
-                    r.raise_for_status()
-                    pdf_bytes = r.content
-                    print(f"[PDF] Descargado: {len(pdf_bytes)} bytes")
+            # 4. Navegar a la clasificación y buscar a TARGET_NAME paginando
+            await page.goto(full_clasif, wait_until="networkidle")
+            await page.wait_for_timeout(2000)
+
+            found_text = ""
+            for _ in range(15):   # máximo 15 páginas
+                page_text = await page.inner_text("body")
+                if TARGET_NAME.upper() in page_text.upper():
+                    # Extraer el fragmento alrededor del nombre
+                    idx = page_text.upper().index(TARGET_NAME.upper())
+                    found_text = page_text[max(0, idx - 20): idx + 200]
                     break
+                # Siguiente página
+                next_btn = await page.query_selector(
+                    'a:has-text("›"), a:has-text(">"), a[title*="iguiente"]')
+                if not next_btn or not await next_btn.is_visible():
+                    break
+                await next_btn.click()
+                await page.wait_for_load_state("networkidle")
+                await page.wait_for_timeout(1000)
 
-            # Método B: formulario Phoca Download — id="pdlicensesubmit", name="submit"
-            if not pdf_bytes:
-                submit_btn = await page.query_selector('input[id="pdlicensesubmit"]')
-                if submit_btn:
-                    print("[PDF] Método B: formulario Phoca Download (id=pdlicensesubmit)")
-                    async with page.expect_download(timeout=20000) as dl_info:
-                        await submit_btn.click()
-                    download = await dl_info.value
-                    tmp = "/tmp/fmto_result.pdf"
-                    await download.save_as(tmp)
-                    pdf_bytes = open(tmp, "rb").read()
-                    print(f"[PDF] Descargado: {len(pdf_bytes)} bytes")
+            if not found_text:
+                print(f"No se encontró {TARGET_NAME} en la clasificación.")
+                return
 
-            # Método C: cualquier link de descarga en fmto.net → interceptar como descarga
-            if not pdf_bytes:
-                for lnk in await page.query_selector_all("a"):
-                    href = (await lnk.get_attribute("href")) or ""
-                    text = ((await lnk.inner_text()) or "").strip().lower()
-                    if not is_fmto_href(href):
-                        continue
-                    if any(x in href for x in ["com_phocadownload", "download", "descargar"]) or \
-                       any(x in text for x in ["descargar", "pdf", "resultado"]):
-                        print(f"[PDF] Método C: {href!r} (texto: {text!r})")
-                        try:
-                            async with page.expect_download(timeout=15000) as dl_info:
-                                await lnk.click()
-                            download = await dl_info.value
-                            tmp = "/tmp/fmto_result.pdf"
-                            await download.save_as(tmp)
-                            pdf_bytes = open(tmp, "rb").read()
-                            print(f"[PDF] Descargado: {len(pdf_bytes)} bytes")
-                        except Exception as e:
-                            print(f"[PDF] Método C falló ({e}), probando siguiente...")
-                            await page.goto(competition_url, wait_until="networkidle")
-                            continue
-                        break
+            print(f"[Clasificación] Fragmento:\n{found_text}")
 
-            if not pdf_bytes:
-                raise Exception("No se encontró ningún enlace de descarga de PDF en la página de la competición.")
+            # 5. Extraer Tanda y Puesto del fragmento
+            tanda_m  = re.search(r'Tanda\s*(\d+)', found_text, re.IGNORECASE)
+            puesto_m = re.search(r'Puesto.*?(\d+)|(\d+)\s*$', found_text)
 
-            # 6. Parsear y notificar
-            result = parse_pdf(pdf_bytes)
-            _notify(result, competition_url)
+            # En la tabla mobile el texto es: "Prueba - Tanda N ... puesto"
+            # Buscamos el número de puesto que aparece después de la fecha
+            nums = re.findall(r'\b(\d+)\b', found_text)
+            tanda  = tanda_m.group(1) if tanda_m else "?"
+            # El puesto suele ser el último número del fragmento (o el que sigue a la fecha)
+            puesto = nums[-1] if nums else "?"
+
+            print(f"  Tanda={tanda}  Puesto={puesto}")
+
+            # 6. Comprobar memoria
+            comp_key = f"{comp_date}_P{puesto}_T{tanda}"
+            if comp_key == last_competition:
+                print(f"Sin cambios: {comp_key} ya notificado.")
+                return
+
+            # 7. Enviar mensaje
+            msg = (
+                f"🎯 *Preparatoria Pistola Aire 10m*\n"
+                f"📅 {comp_date}\n\n"
+                f"📍 Puesto: *{puesto}* | ⏱ Tanda: *{tanda}*"
+            )
+            send_telegram(msg)
+            save_last_competition(comp_key)
+            print(f"Notificación enviada: {comp_key}")
 
         except Exception as e:
-            print(f"ERROR: {e}")
             print(f"ERROR (sin notificar): {e}")
-
         finally:
             await browser.close()
-
-
-def _notify(result, competition_url):
-    if not result:
-        raise Exception(f"El N Fed {TARGET_NFED} no apareció en el PDF o no se pudo extraer puesto/tanda.")
-
-    puesto, tanda, _ = result
-    comp_name = competition_url.split("/")[-1].replace("-", " ").title()
-    msg = (
-        f"🎯 *Preparatoria Pistola Aire 10m*\n"
-        f"📋 {comp_name}\n\n"
-        f"N Fed: `{TARGET_NFED}`\n"
-        f"📍 Puesto: *{puesto}*\n"
-        f"⏱ Tanda: *{tanda}*"
-    )
-    send_telegram(msg)
-    print(f"Resultado enviado → Puesto: {puesto} | Tanda: {tanda}")
-    save_last_competition(competition_url)
 
 
 if __name__ == "__main__":
