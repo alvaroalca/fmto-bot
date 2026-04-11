@@ -5,13 +5,14 @@ import requests
 from datetime import date, datetime
 from playwright.async_api import async_playwright
 
-WIRTEX_USER      = os.getenv("WIRTEX_USER")
-WIRTEX_PASS      = os.getenv("WIRTEX_PASS")
-TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-LAST_SCORES      = os.getenv("LAST_SCORES", "")
-GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
+WIRTEX_USER       = os.getenv("WIRTEX_USER")
+WIRTEX_PASS       = os.getenv("WIRTEX_PASS")
+TELEGRAM_TOKEN    = os.getenv("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
+GITHUB_TOKEN      = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")
+
+MEMORY_FILE = ".github/last_scores.txt"
 
 WIRTEX_URL    = "https://www.wirtexsports.com"
 COMP_KEYWORD  = "PISTOLA AIRE 10 METROS"
@@ -33,28 +34,42 @@ def send_telegram(text):
 
 
 # ---------------------------------------------------------------------------
-# Memoria
+# Memoria (fichero en el repo via GitHub Contents API)
 # ---------------------------------------------------------------------------
-def save_last_scores(key):
-    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
-        print("[Memoria] Sin token/repo, no se puede guardar.")
-        return
-    api = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables/LAST_SCORES"
-    headers = {
+def _gh_headers():
+    return {
         "Authorization": f"Bearer {GITHUB_TOKEN}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    r = requests.patch(api, json={"name": "LAST_SCORES", "value": key}, headers=headers)
-    print(f"[Memoria PATCH] status={r.status_code} body={r.text[:300]}")
-    if r.status_code in (404, 403):
-        r = requests.post(
-            f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables",
-            json={"name": "LAST_SCORES", "value": key},
-            headers=headers,
-        )
-        print(f"[Memoria POST]  status={r.status_code} body={r.text[:300]}")
-    print(f"[Memoria] LAST_SCORES={key!r} → {'OK' if r.status_code in (200,201,204) else 'ERROR'}")
+
+def load_last_scores():
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        return ""
+    api = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/{MEMORY_FILE}"
+    r = requests.get(api, headers=_gh_headers())
+    if r.status_code == 200:
+        import base64
+        return base64.b64decode(r.json()["content"]).decode().strip()
+    return ""
+
+def save_last_scores(key):
+    if not GITHUB_TOKEN or not GITHUB_REPOSITORY:
+        print("[Memoria] Sin token/repo.")
+        return
+    import base64
+    api = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/{MEMORY_FILE}"
+    # Obtener SHA actual si el fichero ya existe
+    r = requests.get(api, headers=_gh_headers())
+    sha = r.json().get("sha") if r.status_code == 200 else None
+    data = {
+        "message": f"chore: last_scores={key}",
+        "content": base64.b64encode(key.encode()).decode(),
+    }
+    if sha:
+        data["sha"] = sha
+    r = requests.put(api, json=data, headers=_gh_headers())
+    print(f"[Memoria] last_scores={key!r} → {'OK' if r.status_code in (200,201) else f'ERROR {r.status_code}'}")
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +121,9 @@ def build_message(fecha, total, xs, series):
 # Main
 # ---------------------------------------------------------------------------
 async def run():
+    last_scores = load_last_scores()
+    print(f"[Memoria] Último registro: {last_scores!r}")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         context = await browser.new_context(viewport={"width": 1920, "height": 1080})
@@ -204,7 +222,7 @@ async def run():
             print(f"  Competición: {comp_date} → {comp_url}")
 
             # 5. Comprobar si ya fue notificada
-            if comp_date == LAST_SCORES:
+            if comp_date == last_scores:
                 print(f"Sin cambios: {comp_date} ya notificado.")
                 return
 
@@ -283,7 +301,7 @@ async def run():
 
             # 9. Construir y enviar mensaje
             score_key = f"{fecha_comp}_{total}"
-            if score_key == LAST_SCORES:
+            if score_key == last_scores:
                 print(f"Sin cambios: {score_key} ya notificado.")
                 return
 
