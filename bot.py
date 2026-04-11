@@ -1,6 +1,7 @@
 import os
 import asyncio
 import re
+import json
 import requests
 from datetime import date
 from playwright.async_api import async_playwright
@@ -12,10 +13,9 @@ TELEGRAM_CHAT_ID  = os.getenv("TELEGRAM_CHAT_ID")
 GITHUB_TOKEN      = os.getenv("GITHUB_TOKEN", "")
 GITHUB_REPOSITORY = os.getenv("GITHUB_REPOSITORY", "")
 
-WIRTEX_URL   = "https://www.wirtexsports.com"
-COMP_KEYWORD = "PISTOLA AIRE 10 METROS"
-TARGET_NAME  = "ALVARO ALCARAZ"
-MEMORY_FILE  = ".github/last_competition.txt"
+WIRTEX_URL  = "https://www.wirtexsports.com"
+TARGET_NAME = "ALVARO ALCARAZ"
+MEMORY_FILE = ".github/last_competition.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +83,7 @@ async def run():
         page = await context.new_page()
 
         try:
-            # 1. Login en Wirtex
+            # 1. Login en Wirtex (interfaz móvil)
             print("Logueando en Wirtex...")
             await page.goto(WIRTEX_URL, wait_until="networkidle")
 
@@ -92,8 +92,6 @@ async def run():
                 await spain.click()
                 await page.wait_for_load_state("networkidle")
                 await page.wait_for_timeout(2000)
-
-            print(f"  URL login: {page.url}")
 
             await page.evaluate(
                 """([user, pwd]) => {
@@ -129,7 +127,7 @@ async def run():
                 raise Exception("Login fallido en Wirtex.")
             print(f"Sesión iniciada. URL: {page.url}")
 
-            # 2. Buscar la próxima competición PREPARATORIA futura (interfaz móvil)
+            # 2. Buscar la próxima competición PREPARATORIA futura
             today = date.today()
             comp_info = await page.evaluate("""
                 (todayStr) => {
@@ -159,8 +157,9 @@ async def run():
             comp_id   = comp_info["id"]
             print(f"  Próxima competición: {comp_date} (ID={comp_id})")
 
-            # 3. Navegar al detalle móvil para obtener pCodInscripcion
-            mobile_det = f"https://www.wirtexsports.com/Mobile/GLB/Competicion/Competicion_Det_Ver/{comp_id}?pCodInscripcion=0"
+            # 3. Obtener pCodInscripcion desde el detalle móvil
+            mobile_det = (f"{WIRTEX_URL}/Mobile/GLB/Competicion/"
+                          f"Competicion_Det_Ver/{comp_id}?pCodInscripcion=0")
             await page.goto(mobile_det, wait_until="networkidle")
             await page.wait_for_timeout(1500)
 
@@ -177,23 +176,17 @@ async def run():
             """)
 
             if not inscripcion_code:
-                print("No se encontró pCodInscripcion. ¿Sin inscripción en esta competición?")
+                print("Sin inscripción en esta competición. Nada que hacer.")
                 return
 
             print(f"  pCodInscripcion: {inscripcion_code}")
 
-            # 4. Navegar directamente a la ficha de inscripción (clásica)
-            #    Este endpoint devuelve los datos del inscrito: Tanda, Puesto, etc.
-            inscripcion_url = (
-                f"https://www.wirtexsports.com/Publica/GLB/Competicion/"
-                f"co_prec_InscripcionVer/{inscripcion_code}"
-            )
+            # 4. Desde la ficha de inscripción extraer la URL de PuntuacionesIndex
+            inscripcion_url = (f"{WIRTEX_URL}/Publica/GLB/Competicion/"
+                               f"co_prec_InscripcionVer/{inscripcion_code}")
             await page.goto(inscripcion_url, wait_until="networkidle")
             await page.wait_for_timeout(2000)
 
-            # 5. En InscripcionVer hay un botón "Resultados" cuyo onclick contiene
-            #    la URL de co_prec_PuntuacionesIndex con piCod_CoPru.
-            #    Extraemos esa URL y navegamos ahí para obtener Tanda y Puesto.
             puntuaciones_path = await page.evaluate("""
                 () => {
                     const els = [...document.querySelectorAll('[onclick], a[href]')];
@@ -208,97 +201,71 @@ async def run():
             """)
 
             if not puntuaciones_path:
-                # Fallback: buscar en el HTML fuente
                 html_src = await page.content()
-                m = re.search(r'/Publica/GLB/Competicion/co_prec_PuntuacionesIndex[^\'"\\s]+',
-                              html_src)
+                m = re.search(
+                    r'/Publica/GLB/Competicion/co_prec_PuntuacionesIndex[^\'"\\s]+', html_src)
                 puntuaciones_path = m.group(0) if m else None
 
             if not puntuaciones_path:
-                print("No se encontró enlace a Puntuaciones desde InscripcionVer.")
+                print("Sin enlace a Puntuaciones. Tanda/Puesto aún no asignados.")
                 return
 
-            puntuaciones_url = "https://www.wirtexsports.com" + puntuaciones_path
+            puntuaciones_url = WIRTEX_URL + puntuaciones_path
             print(f"  URL puntuaciones: {puntuaciones_url}")
 
-            # 6. Navegar a PuntuacionesIndex e interceptar la respuesta JSON del jqGrid
-            import json as _json
+            # 5. Navegar a PuntuacionesIndex e interceptar la respuesta JSON del jqGrid
             grid_data = []
 
             async def capture_grid(response):
-                url = response.url
-                if "PuntuacionesGrid" in url or "PuntuacionesObtener" in url:
+                if "PuntuacionesGrid" in response.url or "PuntuacionesObtener" in response.url:
                     try:
-                        body = await response.text()
-                        grid_data.append({"url": url, "body": body})
-                        print(f"  [AJAX grid] {url} → {len(body)} chars")
+                        grid_data.append(await response.text())
                     except Exception:
                         pass
 
             page.on("response", capture_grid)
-
             await page.goto(puntuaciones_url, wait_until="networkidle")
-            await page.wait_for_timeout(4000)   # dar tiempo al jqGrid
+            await page.wait_for_timeout(4000)
 
-            print(f"  Grid responses capturadas: {len(grid_data)}")
+            # 6. Buscar TARGET_NAME en el JSON del grid (puede haber varias páginas)
+            tanda, puesto = None, None
+            target_upper  = TARGET_NAME.upper()
 
-            # Buscar en los JSON del grid
-            tanda, puesto = "?", "?"
-            target_upper = TARGET_NAME.upper()
-
-            for resp in grid_data:
-                body = resp["body"]
-                # El JSON del jqGrid tiene "rows": [{...}, ...]
+            for body_text in grid_data:
                 try:
-                    data = _json.loads(body)
-                    rows = data.get("rows", [])
-                    for row in rows:
-                        cell_vals = row.get("cell", [])
-                        row_str = " ".join(str(c) for c in cell_vals).upper()
-                        if target_upper in row_str:
-                            print(f"[Grid row] {cell_vals}")
-                            # Buscar Tanda y Puesto en los valores de la fila
-                            full = " ".join(str(c) for c in cell_vals)
-                            tm = re.search(r'Tanda\s+(\d+)', full, re.IGNORECASE)
-                            pm = re.search(r'\bPuesto\s+(\d+)|\bPuesto\b[^\d]*(\d+)', full, re.IGNORECASE)
-                            tanda  = tm.group(1) if tm else "?"
-                            # El puesto suele ser una celda numérica
-                            if pm:
-                                puesto = pm.group(1) or pm.group(2)
-                            else:
-                                nums = [str(c) for c in cell_vals if str(c).isdigit() and 1 <= int(c) <= 200]
-                                puesto = nums[0] if nums else "?"
-                            break
-                    if tanda != "?" or puesto != "?":
-                        break
+                    data = json.loads(body_text)
                 except Exception:
-                    # Si no es JSON, buscar en texto plano
-                    if target_upper in body.upper():
-                        tm = re.search(r'Tanda\s+(\d+)', body, re.IGNORECASE)
-                        pm = re.search(r'"puesto"\s*:\s*"?(\d+)', body, re.IGNORECASE)
-                        tanda  = tm.group(1) if tm else "?"
-                        puesto = pm.group(1) if pm else "?"
-                        print(f"[Grid texto] Tanda={tanda} Puesto={puesto}")
-                        break
+                    continue
+                for row in data.get("rows", []):
+                    cells = row.get("cell", [])
+                    if target_upper not in " ".join(str(c) for c in cells).upper():
+                        continue
+                    full = " ".join(str(c) for c in cells)
+                    tm = re.search(r'Tanda\s+(\d+)', full, re.IGNORECASE)
+                    tanda = tm.group(1) if tm else "?"
+                    # El puesto es la primera celda numérica entre 1-200
+                    # que no sea el número de tanda
+                    nums = [str(c) for c in cells
+                            if str(c).isdigit() and 1 <= int(c) <= 200
+                            and str(c) != tanda]
+                    puesto = nums[0] if nums else "?"
+                    break
+                if tanda is not None:
+                    break
 
-            if tanda == "?" and puesto == "?":
-                # Debug: imprimir primeros 400 chars de cada respuesta capturada
-                for resp in grid_data:
-                    print(f"[DEBUG grid body] {resp['url']}\n  {resp['body'][:400]}")
-                if not grid_data:
-                    print("No se capturó ninguna respuesta del grid. "
-                          "Tanda/Puesto aún no asignados o grid no cargó.")
+            if tanda is None:
+                print("Tanda/Puesto aún no asignados por la organización. Se reintentará.")
                 return
 
             print(f"  Tanda={tanda}  Puesto={puesto}")
 
-            # 6. Comprobar memoria
+            # 7. Comprobar memoria
             comp_key = f"{comp_date}_P{puesto}_T{tanda}"
             if comp_key == last_competition:
                 print(f"Sin cambios: {comp_key} ya notificado.")
                 return
 
-            # 7. Enviar mensaje
+            # 8. Enviar mensaje
             msg = (
                 f"🎯 *Preparatoria Pistola Aire 10m*\n"
                 f"📅 {comp_date}\n\n"
