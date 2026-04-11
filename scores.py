@@ -197,19 +197,20 @@ async def run():
                     const [ty, tm, td] = todayStr.split('-').map(Number);
                     const todayTs = new Date(ty, tm-1, td).getTime();
                     const rows = [...document.querySelectorAll('tr[onclick]')];
+                    let best = null, bestTs = 0;
                     for (const row of rows) {
                         const text = row.innerText.toUpperCase();
                         if (!text.includes('PISTOLA AIRE') || !text.includes('PREPARATORIA')) continue;
                         const dm = row.innerText.match(/(\\d{2})\\/(\\d{2})\\/(\\d{4})/);
                         if (!dm) continue;
                         const rowTs = new Date(+dm[3], +dm[2]-1, +dm[1]).getTime();
-                        if (rowTs > todayTs) continue;
-                        // Extraer URL del onclick: onclick="document.location.href = '/Mobile/...'"
+                        if (rowTs > todayTs) continue;          // futura, saltar
+                        if (rowTs <= bestTs) continue;          // no es la más reciente
                         const oc = row.getAttribute('onclick') || '';
                         const m = oc.match(/href\\s*=\\s*'([^']+)'/);
-                        return m ? {url: m[1], date: dm[0]} : null;
+                        if (m) { best = {url: m[1], date: dm[0]}; bestTs = rowTs; }
                     }
-                    return null;
+                    return best;
                 }
             """, str(today))
 
