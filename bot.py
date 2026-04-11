@@ -129,76 +129,61 @@ async def run():
                 raise Exception("Login fallido en Wirtex.")
             print(f"Sesión iniciada. URL: {page.url}")
 
-            # 2. Cambiar a la interfaz clásica (donde sí aparece Tanda/Puesto antes de tirar)
-            print("Cambiando a interfaz clásica...")
-            await page.goto("https://www.wirtexsports.com/Publica/GLB/HomePub?MOBILE=NO", wait_until="networkidle")
-            await page.wait_for_timeout(2000)
-            print(f"  URL clásica: {page.url}")
-
-            # 3. Buscar la próxima competición PREPARATORIA futura en la interfaz clásica
+            # 2. Buscar la próxima competición PREPARATORIA futura (interfaz móvil)
             today = date.today()
             comp_info = await page.evaluate("""
                 (todayStr) => {
                     const [ty, tm, td] = todayStr.split('-').map(Number);
                     const todayTs = new Date(ty, tm-1, td).getTime();
-                    // Filas de la tabla de competiciones (pueden ser <tr> o <div>)
-                    const rows = [...document.querySelectorAll('tr, [class*="row"], [class*="Row"]')];
+                    const rows = [...document.querySelectorAll('tr[onclick]')];
                     for (const row of rows) {
                         const text = row.innerText.toUpperCase();
                         if (!text.includes('PISTOLA AIRE') || !text.includes('PREPARATORIA')) continue;
-                        // Buscar fecha en formato dd/mm/yyyy o yyyy-mm-dd
                         const dm = row.innerText.match(/(\\d{2})\\/(\\d{2})\\/(\\d{4})/);
                         if (!dm) continue;
                         const rowTs = new Date(+dm[3], +dm[2]-1, +dm[1]).getTime();
                         if (rowTs < todayTs) continue;
-                        // Buscar enlace de detalle: href o onclick
-                        const links = [...row.querySelectorAll('a[href], [onclick]')];
-                        for (const lnk of links) {
-                            const href = lnk.getAttribute('href') || '';
-                            const oc   = lnk.getAttribute('onclick') || '';
-                            const combined = href + oc;
-                            if (combined.toLowerCase().includes('competicion_det') ||
-                                combined.toLowerCase().includes('detalle') ||
-                                combined.toLowerCase().includes('inscripcion')) {
-                                // extraer URL
-                                const mUrl = combined.match(/\\/[^'"\\s]+/);
-                                if (mUrl) return {url: mUrl[0], date: dm[0]};
-                            }
-                        }
-                        // fallback: primer href de la fila
-                        const firstA = row.querySelector('a[href]');
-                        if (firstA) return {url: firstA.getAttribute('href'), date: dm[0]};
+                        const oc = row.getAttribute('onclick') || '';
+                        const mId = oc.match(/Competicion_Det_Ver\\/(\\d+)/);
+                        return mId ? {id: mId[1], date: dm[0]} : null;
                     }
                     return null;
                 }
             """, str(today))
 
-            # DEBUG: si no encontramos nada, imprimir el texto completo para ver la estructura
             if not comp_info:
-                body_text = await page.inner_text("body")
-                print(f"[DEBUG clásica] No se encontró competición. Texto página (500 chars):\n{body_text[:500]}")
-                # Imprimir todas las filas con onclick
-                all_rows = await page.evaluate("""
-                    () => [...document.querySelectorAll('tr[onclick], a[onclick]')].slice(0,20).map(el => ({
-                        text: el.innerText.trim().slice(0,80),
-                        onclick: el.getAttribute('onclick'),
-                        href: el.getAttribute('href') || '',
-                    }))
-                """)
-                print("[DEBUG filas clásica]")
-                for r in all_rows:
-                    print(f"  {r['text']!r} | {r['onclick']} | {r['href']}")
-                print("No hay próxima PREPARATORIA en la interfaz clásica. Nada que hacer.")
+                print("No hay próxima PREPARATORIA futura. Nada que hacer.")
                 return
 
             comp_date = comp_info["date"]
-            comp_det  = ("https://www.wirtexsports.com" + comp_info["url"]
-                         if comp_info["url"].startswith("/") else comp_info["url"])
-            print(f"  Próxima competición: {comp_date} → {comp_det}")
+            comp_id   = comp_info["id"]
+            print(f"  Próxima competición: {comp_date} (ID={comp_id})")
 
-            # 4. Navegar al detalle y buscar Tanda/Puesto de TARGET_NAME
-            await page.goto(comp_det, wait_until="networkidle")
+            # 3. Cambiar a interfaz clásica y navegar a la sección INSCRIPCIONES
+            #    vía la función JS MAIN.doCompeticionesPublicIndexGo
+            print("Cambiando a interfaz clásica...")
+            await page.goto("https://www.wirtexsports.com/Publica/GLB/HomePub?MOBILE=NO",
+                            wait_until="networkidle")
             await page.wait_for_timeout(2000)
+            print(f"  URL clásica: {page.url}")
+
+            # Llamar a la función JS que carga la tabla de inscritos (AJAX)
+            await page.evaluate(f"""
+                const fakeEv = {{
+                    preventDefault: function(){{}},
+                    stopPropagation: function(){{}},
+                    target: document.body
+                }};
+                MAIN.doCompeticionesPublicIndexGo(
+                    fakeEv,
+                    '/Publica/GLB/Competicion/CompeticionesMainDetalle',
+                    'INSCRIPCIONES',
+                    {comp_id}, 'P', 'PISTOLA AIRE 10 METROS', true
+                );
+            """)
+            # Esperar a que cargue el AJAX
+            await page.wait_for_load_state("networkidle")
+            await page.wait_for_timeout(3000)
 
             page_text = await page.inner_text("body")
 
@@ -212,12 +197,12 @@ async def run():
                     break
                 occ += 1
                 fragment = page_text[max(0, idx - 200): idx + 400]
-                print(f"[DEBUG detalle ocurrencia {occ}]\n{repr(fragment)}\n---")
+                print(f"[DEBUG inscripciones ocurrencia {occ}]\n{repr(fragment)}\n---")
                 start = idx + 1
             if occ == 0:
-                print(f"[DEBUG] {TARGET_NAME} no aparece en el detalle. Texto (500):\n{page_text[:500]}")
+                print(f"[DEBUG] {TARGET_NAME} no encontrado. Primeros 800 chars:\n{page_text[:800]}")
 
-            # Buscar ocurrencia con Tanda/Puesto cerca
+            # 4. Buscar ocurrencia con Tanda/Puesto cerca
             found_text = ""
             start = 0
             while True:
@@ -225,16 +210,16 @@ async def run():
                 if idx == -1:
                     break
                 fragment = page_text[max(0, idx - 200): idx + 400]
-                if re.search(r'Tanda\s*[:\-]?\s*\d+|Puesto\s*[:\-]?\s*\d+|\bT\s*\d+\b', fragment, re.IGNORECASE):
+                if re.search(r'Tanda\s*[:\-]?\s*\d+|Puesto\s*[:\-]?\s*\d+', fragment, re.IGNORECASE):
                     found_text = fragment
                     break
                 start = idx + 1
 
             if not found_text:
-                print(f"No se encontró {TARGET_NAME} con Tanda/Puesto asignado en el detalle.")
+                print(f"No se encontró {TARGET_NAME} con Tanda/Puesto asignado.")
                 return
 
-            print(f"[Detalle] Fragmento:\n{found_text}")
+            print(f"[Inscripciones] Fragmento:\n{found_text}")
 
             # 5. Extraer Tanda y Puesto
             tanda_m  = re.search(r'Tanda\s*[:\-]?\s*(\d+)', found_text, re.IGNORECASE)
@@ -242,7 +227,7 @@ async def run():
             tanda  = tanda_m.group(1)  if tanda_m  else "?"
             puesto = puesto_m.group(1) if puesto_m else "?"
 
-            # Fallback: números que preceden al nombre (columna de puesto en tabla)
+            # Fallback: último número antes del nombre en la tabla
             if puesto == "?":
                 name_idx    = found_text.upper().index(target_upper)
                 nums_before = re.findall(r'\b(\d+)\b', found_text[:name_idx])
