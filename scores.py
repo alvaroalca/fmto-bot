@@ -170,34 +170,7 @@ async def run():
                 raise Exception("Login fallido en Wirtex: sigue mostrando usuario invitado.")
             print(f"Sesión iniciada. URL: {page.url}")
 
-            # 2. Ya estamos en /Mobile/GLB/Competicion/CompeticionesGrid tras el login
-            #    Inspeccionamos el HTML de las filas via JS para encontrar los botones de acción
-            print("Inspeccionando filas de competición...")
-            row_infos = await page.evaluate("""
-                () => {
-                    const rows = [...document.querySelectorAll('tr')];
-                    return rows.map(row => ({
-                        text: row.innerText.trim().substring(0, 120),
-                        html: row.outerHTML.substring(0, 1500),
-                        clickables: [...row.querySelectorAll('a,button,img,[onclick]')].map(el => ({
-                            tag:     el.tagName,
-                            href:    el.getAttribute('href') || '',
-                            onclick: el.getAttribute('onclick') || '',
-                            cls:     el.className || '',
-                            src:     el.getAttribute('src') || '',
-                            text:    (el.innerText || '').trim().substring(0, 30),
-                        }))
-                    }));
-                }
-            """)
-            for ri in row_infos:
-                if "PREPARATORIA" in ri["text"].upper():
-                    print(f"\n[ROW] {ri['text']!r}")
-                    print(f"  HTML: {ri['html'][:600]}")
-                    for c in ri["clickables"]:
-                        print(f"  clickable: {c}")
-
-            # 3. Buscar la competición más reciente YA PASADA y hacer clic en resultados via JS
+            # 2. Buscar la competición más reciente YA PASADA
             today     = date.today()
             comp_date = None
 
@@ -239,22 +212,14 @@ async def run():
             # 6. Navegar al detalle de la competición y buscar el enlace de resultados
             await page.goto(comp_url, wait_until="networkidle")
             await page.wait_for_timeout(2000)
-            print(f"Detalle competición cargado. URL: {page.url}")
+            print(f"Detalle competición: {comp_date}")
 
-            det_text = await page.inner_text("body")
-            print(f"[Debug detalle] Primeros 1000:\n{det_text[:1000]}")
-
-            # Listar todos los links del detalle para encontrar el de resultados/puntuaciones
             det_links = await page.evaluate("""
                 () => [...document.querySelectorAll('a[href], [onclick]')].map(el => ({
-                    tag:     el.tagName,
                     href:    el.getAttribute('href') || '',
                     onclick: el.getAttribute('onclick') || '',
-                    text:    (el.innerText || '').trim().substring(0, 60),
                 }))
             """)
-            for lnk in det_links:
-                print(f"  [det link] {lnk}")
 
             # Navegar al enlace de puntuaciones/resultados
             scores_url = None
@@ -276,19 +241,15 @@ async def run():
                 print("No se encontró enlace de puntuaciones en el detalle.")
                 return
 
-            print(f"  URL puntuaciones: {scores_url}")
             await page.goto(scores_url, wait_until="networkidle")
             await page.wait_for_timeout(2000)
-            print(f"Página resultados cargada.")
 
-            # 7. Extraer datos de la página de Puntuación Individual
-            #    Hacer scroll hasta el fondo para forzar carga de las 6 series
+            # 7. Extraer datos — scroll para cargar las 6 series completas
             for _ in range(4):
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await page.wait_for_timeout(800)
 
             page_text = await page.inner_text("body")
-            print(f"[Puntuación] Texto completo ({len(page_text)} chars):\n{page_text}")
 
             # Total (aparece como "Ptos.\n542" — label en línea propia)
             total_m = re.search(r'\bPtos\.\s*\n\s*(\d+)', page_text)
