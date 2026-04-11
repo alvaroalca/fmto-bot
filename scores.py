@@ -46,7 +46,7 @@ def save_last_scores(key):
         "X-GitHub-Api-Version": "2022-11-28",
     }
     r = requests.patch(api, json={"name": "LAST_SCORES", "value": key}, headers=headers)
-    if r.status_code == 404:
+    if r.status_code in (404, 403):
         r = requests.post(
             f"https://api.github.com/repos/{GITHUB_REPOSITORY}/actions/variables",
             json={"name": "LAST_SCORES", "value": key},
@@ -59,22 +59,25 @@ def save_last_scores(key):
 # Parseo de series
 # ---------------------------------------------------------------------------
 def parse_series(text):
-    """Extrae lista de {score, shots} de cada serie del texto de Detalles."""
+    """Extrae lista de {score, shots} de cada serie.
+    Formato mobile: 'Serie N\\t93 Ptos.\\n1\\n10\\n 2\\nX\\n...'
+    Los tokens alternan: posición (1-10), valor del disparo.
+    """
     series = []
-    # Buscar bloques "Serie N ... Puntuación de la serie: X ... (disparos)"
     blocks = re.split(r'Serie\s+\d+', text, flags=re.IGNORECASE)
-    for block in blocks[1:]:  # skip first (before Serie 1)
-        score_m = re.search(r'Puntuaci[oó]n de la serie[:\s]+(\d+)', block, re.IGNORECASE)
+    for block in blocks[1:]:
+        score_m = (re.search(r'(\d+)\s*Ptos\.', block) or
+                   re.search(r'Puntuaci[oó]n de la serie[:\s]+(\d+)', block, re.IGNORECASE))
         if not score_m:
             continue
         score = int(score_m.group(1))
-        # Disparos: X, 10, dígito simple, / — aparecen después del número de posición (1..10)
-        shots = re.findall(r'(?:^|\s)(10|X|/|[0-9])(?:\s|$)', block)
-        # Alternativa más permisiva si no encuentra 10 disparos
-        if len(shots) < 10:
-            shots = re.findall(r'\b(10|X|[0-9])\b', block)
-            # Filtrar números de posición (1-10 que aparecen como índice)
-            shots = [s for s in shots if s not in [str(i) for i in range(1, 11)] or s == "10"][:10]
+        after = block[score_m.end():]
+        # Tokens alternan posición/valor; tomar los de índice impar (valores)
+        tokens = re.findall(r'\b(X|10|[0-9]|/)\b', after)
+        shots = tokens[1::2]   # val1, val2, ... (posiciones en índices pares)
+        if len(shots) < 5:    # fallback si el patrón no encaja
+            shots = [t for t in tokens
+                     if not (t.isdigit() and 1 <= int(t) <= 9)][:10]
         series.append({"score": score, "shots": shots[:10]})
     return series
 
@@ -82,7 +85,7 @@ def parse_series(text):
 # ---------------------------------------------------------------------------
 # Construcción del mensaje
 # ---------------------------------------------------------------------------
-def build_message(fecha, clasificaciones, puesto, total, xs, series):
+def build_message(fecha, clasificaciones, clasif_general, total, xs, series):
     lines = [
         f"🎯 *Puntuaciones - Preparatoria Pistola Aire 10m*",
         f"📅 {fecha}",
@@ -90,9 +93,8 @@ def build_message(fecha, clasificaciones, puesto, total, xs, series):
     ]
     if clasificaciones:
         lines.append(clasificaciones)
-    lines += [
-        f"📍 Puesto: *{puesto}* | 💯 Total: *{total}* | ✖️ X's: *{xs}*",
-    ]
+        lines.append("")
+    lines.append(f"🏅 Clasif: *{clasif_general}º* | 💯 Total: *{total}* | ✖️ X's: *{xs}*")
     if series:
         lines.append("")
         for i, s in enumerate(series, 1):
@@ -279,102 +281,49 @@ async def run():
             await page.wait_for_timeout(2000)
             print(f"Página resultados cargada.")
 
-            # 7. Buscar TARGET_NAME paginando si es necesario
-            found = False
-            for _ in range(10):   # máximo 10 páginas
-                page_text = await page.inner_text("body")
-                if TARGET_NAME.upper() in page_text.upper():
-                    found = True
-                    break
-                # Ir a siguiente página
-                next_btn = None
-                for sel in ['a:has-text("›")', 'a:has-text(">")',
-                            'a[title="siguiente"]', 'a.next']:
-                    nb = await page.query_selector(sel)
-                    if nb and await nb.is_visible():
-                        next_btn = nb
-                        break
-                if not next_btn:
-                    break
-                await next_btn.click()
-                await page.wait_for_load_state("networkidle")
-                await page.wait_for_timeout(1000)
+            # 7. Extraer datos de la página de Puntuación Individual
+            #    (la página ya muestra solo los datos del usuario logueado)
+            page_text = await page.inner_text("body")
+            print(f"[Puntuación] Primeros 800:\n{page_text[:800]}")
 
-            if not found:
-                print(f"No se encontró {TARGET_NAME} en los resultados.")
-                return
+            # Total (aparece como "Ptos.\n542" — label en línea propia)
+            total_m = re.search(r'\bPtos\.\s*\n\s*(\d+)', page_text)
+            total   = total_m.group(1) if total_m else "?"
 
-            # 8. Extraer clasificaciones, puesto, total, tanda de la zona del tirador
-            # El texto del área de ALCARAZ tiene el formato:
-            # "ALVARO ALCARAZ PEREZ (Clasif. SENIOR: N) ... Prueba - Tanda N fecha fecha puesto total clasif"
-            idx = page_text.upper().index(TARGET_NAME.upper())
-            snippet = page_text[max(0, idx-50): idx+600]
-            print(f"[Snippet tirador]\n{snippet}")
+            # X's / 10 interior (aparece como "10i\n5")
+            xs_m = re.search(r'\b10i\s*\n\s*(\d+)', page_text)
+            xs   = xs_m.group(1) if xs_m else "?"
 
-            clasif_parts = re.findall(
-                r'Clasif\.\s+([A-ZÁ-Ú /ª0-9]+?)\s*[:]\s*(\d+)',
-                snippet, re.IGNORECASE
-            )
-            clasif_str = "  |  ".join(
-                [f"{k.strip()}: {v}º" for k, v in clasif_parts]
-            ) if clasif_parts else ""
+            # Clasificación general (aparece como "Clas.\n12")
+            clas_m        = re.search(r'\bClas\.\s*\n\s*(\d+)', page_text)
+            clasif_general = clas_m.group(1) if clas_m else "?"
 
-            # Fila de datos: "Prueba - Tanda N DD/MM/YYYY ... puesto total clasif"
-            prueba_m = re.search(
-                r'Prueba\s*-\s*Tanda\s*(\d+)[^\d]*(\d{2}/\d{2}/\d{4})[^\d]+(\d+)\s+(\d{3,})\s+(\d+)',
-                snippet, re.IGNORECASE
-            )
-            tanda = puesto = total = xs = "?"
+            # Clasificaciones por categoría
+            cat_m    = re.search(r'Clasf\. Cat\.\s*\n\s*([^\n\t]+)', page_text)
+            niv_m    = re.search(r'Clasf\. Niv\.\s*\n\s*([^\n\t]+)', page_text)
+            catniv_m = re.search(r'Clasf\. Cat/Niv\.\s*\n\s*([^\n\t]+)', page_text)
+            clasif_parts = []
+            if cat_m:    clasif_parts.append(f"Cat: {cat_m.group(1).strip()}")
+            if niv_m:    clasif_parts.append(f"Niv: {niv_m.group(1).strip()}")
+            if catniv_m: clasif_parts.append(f"Cat/Niv: {catniv_m.group(1).strip()}")
+            clasif_str = "  |  ".join(clasif_parts)
+
+            print(f"  Total={total} X's={xs} Clasif={clasif_general}")
+            print(f"  Clasificaciones: {clasif_str}")
+
             fecha_comp = comp_date or "?"
-            if prueba_m:
-                tanda      = prueba_m.group(1)
-                fecha_comp = prueba_m.group(2)
-                puesto     = prueba_m.group(3)
-                total      = prueba_m.group(4)
-                xs         = prueba_m.group(5)
-                print(f"  Tanda={tanda} Fecha={fecha_comp} Puesto={puesto} "
-                      f"Total={total} Clasif={xs}")
 
-            # 9. Clic en botón expandir (+) de la fila del tirador para ver tiros
-            # El botón + está en la fila del nombre del tirador
-            archer_row = None
-            all_rows = await page.query_selector_all("tr")
-            for row in all_rows:
-                rt = await row.inner_text()
-                if TARGET_NAME.upper() in rt.upper():
-                    archer_row = row
-                    break
+            # 8. Parsear series de tiros
+            series = parse_series(page_text)
+            print(f"  Series extraídas: {len(series)}")
 
-            series = []
-            if archer_row:
-                expand_btn = await archer_row.query_selector("a, button")
-                if expand_btn:
-                    await expand_btn.click()
-                    await page.wait_for_load_state("networkidle")
-                    await page.wait_for_timeout(2000)
-                    detail_text = await page.inner_text("body")
-                    print(f"[Debug detalles] Primeros 800:\n{detail_text[:800]}")
-
-                    # Extraer Nº de 10 interior de la cabecera
-                    xs_m = re.search(r'N[oº]\s*(?:de\s*)?10\s*interior[:\s]+(\d+)',
-                                     detail_text, re.IGNORECASE)
-                    if xs_m:
-                        xs = xs_m.group(1)
-
-                    series = parse_series(detail_text)
-                    print(f"  Series extraídas: {len(series)}")
-                else:
-                    print("  No se encontró botón + en la fila del tirador")
-            else:
-                print("  No se encontró fila del tirador")
-
-            # 10. Construir y enviar mensaje
+            # 9. Construir y enviar mensaje
             score_key = f"{fecha_comp}_{total}"
             if score_key == LAST_SCORES:
                 print(f"Sin cambios: {score_key} ya notificado.")
                 return
 
-            msg = build_message(fecha_comp, clasif_str, puesto, total, xs, series)
+            msg = build_message(fecha_comp, clasif_str, clasif_general, total, xs, series)
             send_telegram(msg)
             save_last_scores(score_key)
             print(f"Puntuaciones enviadas. Clave: {score_key}")
